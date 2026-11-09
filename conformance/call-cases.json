@@ -1,0 +1,3046 @@
+{
+  "format": 1,
+  "about": "Language-neutral cases for how a Pipsocket SDK turns the API's answers into results, retries and errors. See README.md beside this file.",
+  "defaults": {
+    "max_retries": 2,
+    "retry_deadline": 60
+  },
+  "calls": {
+    "place_order": {
+      "method": "POST",
+      "path": "/orders",
+      "keyed": true,
+      "body": {
+        "symbol": "EURUSD",
+        "type": "buy",
+        "volume": 0.1,
+        "type_filling": "ioc",
+        "sl": 1.079
+      }
+    },
+    "cancel_order": {
+      "method": "DELETE",
+      "path": "/orders/881402377",
+      "keyed": true
+    },
+    "check_order": {
+      "method": "POST",
+      "path": "/orders/check",
+      "keyed": false,
+      "body": {
+        "symbol": "EURUSD",
+        "type": "buy",
+        "volume": 0.1,
+        "type_filling": "ioc",
+        "sl": 1.079
+      }
+    },
+    "get_request": {
+      "method": "GET",
+      "path": "/requests/req_5f0c2a9e41d7b3a8c6e2f190",
+      "keyed": false
+    },
+    "list_positions": {
+      "method": "GET",
+      "path": "/positions",
+      "keyed": false
+    },
+    "list_symbols": {
+      "method": "GET",
+      "path": "/symbols",
+      "keyed": false
+    },
+    "get_tick": {
+      "method": "GET",
+      "path": "/symbols/EURUSD/tick",
+      "keyed": false
+    },
+    "history_deals": {
+      "method": "GET",
+      "path": "/history/deals?from=1794009600&to=1794095999",
+      "keyed": false
+    },
+    "engage_kill_switch": {
+      "method": "POST",
+      "path": "/kill-switch",
+      "keyed": false
+    }
+  },
+  "bodies": {
+    "request_completed": {
+      "message": "The request was completed.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "ask": 1.08412,
+        "bid": 1.0841,
+        "comment": "Request executed",
+        "deal": 771203455,
+        "order": 881402311,
+        "position": 0,
+        "price": 1.08412,
+        "retcode": 10009,
+        "retcode_external": 0,
+        "retcode_name": "TRADE_RETCODE_DONE",
+        "volume": 0.1
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "completed"
+    },
+    "request_placed": {
+      "message": "The order was placed.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "ask": 1.08412,
+        "bid": 1.0841,
+        "comment": "Request executed",
+        "deal": 0,
+        "order": 881402311,
+        "position": 0,
+        "price": 1.08412,
+        "retcode": 10008,
+        "retcode_external": 0,
+        "retcode_name": "TRADE_RETCODE_PLACED",
+        "volume": 0.1
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "placed"
+    },
+    "request_partial": {
+      "message": "Only part of the request was completed.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "ask": 1.08412,
+        "bid": 1.0841,
+        "comment": "Request executed",
+        "deal": 771203455,
+        "order": 881402311,
+        "position": 0,
+        "price": 1.08412,
+        "retcode": 10010,
+        "retcode_external": 0,
+        "retcode_name": "TRADE_RETCODE_DONE_PARTIAL",
+        "volume": 0.1
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "partial"
+    },
+    "request_pending": {
+      "message": "No answer from the trade server yet. The order may still execute; it is not sent again.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": null,
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "pending"
+    },
+    "request_unknown": {
+      "message": "The trade server's answer has not arrived in time. Until its outcome is known it blocks conflicting trades on its symbol; it settles when the terminal reports the answer, when the account's records show it, or when the account's owner settles it after checking the broker.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": null,
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "unknown"
+    },
+    "request_rejected": {
+      "error": "trade_rejected",
+      "message": "The stop loss or take profit is invalid for this symbol or too close to the price.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "ask": 1.08412,
+        "bid": 1.0841,
+        "comment": "Invalid stops",
+        "deal": 0,
+        "order": 0,
+        "position": 0,
+        "price": 0,
+        "retcode": 10016,
+        "retcode_external": 0,
+        "retcode_name": "TRADE_RETCODE_INVALID_STOPS",
+        "volume": 0
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "rejected"
+    },
+    "request_not_sent": {
+      "error": "not_sent",
+      "message": "The account's terminal did not send the request: 1000 trading commands are waiting for the trade server",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "error": "busy",
+        "message": "The account's terminal did not send the request: 1000 trading commands are waiting for the trade server"
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "not_sent"
+    },
+    "request_not_executed_evidence": {
+      "error": "not_executed",
+      "message": "The request did not execute: the account's terminal never passed it to MT5.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "error": "not_executed",
+        "message": "The account's terminal never passed the request to MT5: its send ledger has no entry for it, and it can no longer arrive."
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "settlement": "evidence",
+      "state": "not_executed"
+    },
+    "request_not_executed_operator": {
+      "error": "not_executed",
+      "message": "The account's owner settled this request as not executed after checking the broker. That is their finding, not MT5's answer: check positions and history before sending it again.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "outcome": "not_executed",
+        "settled_by": "owner@example.com",
+        "reason": "No such order at the broker."
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "settlement": "operator",
+      "state": "not_executed"
+    },
+    "request_executed": {
+      "message": "The account's owner settled this request as executed after checking the broker. See the account's history for its deals.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "outcome": "executed",
+        "settled_by": "owner@example.com",
+        "reason": "Found as deal 771203455 at the broker."
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "settlement": "operator",
+      "state": "executed"
+    },
+    "request_future_state": {
+      "message": "A state this SDK version does not know.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "ask": 1.08412,
+        "bid": 1.0841,
+        "comment": "Request executed",
+        "deal": 771203455,
+        "order": 881402311,
+        "position": 0,
+        "price": 1.08412,
+        "retcode": 10009,
+        "retcode_external": 0,
+        "retcode_name": "TRADE_RETCODE_DONE",
+        "volume": 0.1
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      },
+      "state": "superseded"
+    },
+    "symbol_busy": {
+      "blocking": [
+        {
+          "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+          "state": "pending"
+        }
+      ],
+      "error": "symbol_busy",
+      "message": "Nothing was sent: an earlier request on this symbol is still waiting for the trade server's answer. Try again in a second.",
+      "not_sent": true
+    },
+    "kill_switch_not_connected": {
+      "error": "account_not_connected",
+      "kill_switch": {
+        "deviation": 20,
+        "engaged": true,
+        "since": 1794064225
+      },
+      "message": "The kill switch is engaged, but the account's terminal did not answer, so nothing was closed. Engage it again once the terminal is connected."
+    },
+    "kill_switch_outcome": {
+      "cancelled": [],
+      "closed": [
+        {
+          "position": 881402311,
+          "request": {
+            "message": "The request was completed.",
+            "request": "req_9b1e4d7c2a5f8e0b3d6a9c12",
+            "result": {
+              "ask": 1.08412,
+              "bid": 1.0841,
+              "comment": "Request executed",
+              "deal": 771203498,
+              "order": 881402390,
+              "position": 0,
+              "price": 1.0841,
+              "retcode": 10009,
+              "retcode_external": 0,
+              "retcode_name": "TRADE_RETCODE_DONE",
+              "volume": 0.1
+            },
+            "sent": {
+              "action": "deal",
+              "comment": "kill switch",
+              "deviation": 20,
+              "expiration": 0,
+              "magic": 0,
+              "order": 0,
+              "position": 881402311,
+              "position_by": 0,
+              "price": 1.0841,
+              "sl": 0,
+              "stoplimit": 0,
+              "symbol": "EURUSD",
+              "tp": 0,
+              "type": "sell",
+              "type_filling": "ioc",
+              "type_time": "gtc",
+              "volume": 0.1
+            },
+            "state": "completed"
+          }
+        }
+      ],
+      "flat": true,
+      "kill_switch": {
+        "deviation": 20,
+        "engaged": true,
+        "since": 1794064225
+      },
+      "message": "The kill switch is engaged and the account has no positions or pending orders.",
+      "remaining": {
+        "orders": 0,
+        "positions": 0
+      },
+      "unanswered": []
+    },
+    "positions": [
+      {
+        "comment": "",
+        "identifier": 881402311,
+        "magic": 0,
+        "price_open": 1.08412,
+        "sl": 1.079,
+        "symbol": "EURUSD",
+        "ticket": 881402311,
+        "time_msc": 1794067801211,
+        "tp": 0,
+        "type": "buy",
+        "volume": 0.1
+      }
+    ],
+    "tick": {
+      "ask": 1.08412,
+      "bid": 1.0841,
+      "flags": 6,
+      "last": 0,
+      "symbol": "EURUSD",
+      "time_msc": 1794067825114,
+      "volume": 0
+    },
+    "deals": [
+      {
+        "comment": "",
+        "commission": -0.35,
+        "entry": "in",
+        "fee": 0,
+        "magic": 0,
+        "order": 881402311,
+        "position": 881402311,
+        "price": 1.08412,
+        "profit": 0,
+        "reason": "expert",
+        "swap": 0,
+        "symbol": "EURUSD",
+        "ticket": 771203455,
+        "time_msc": 1794067801211,
+        "type": "buy",
+        "volume": 0.1
+      },
+      {
+        "comment": "[sl 1.07900]",
+        "commission": -0.35,
+        "entry": "out",
+        "fee": 0,
+        "magic": 0,
+        "order": 881402390,
+        "position": 881402311,
+        "price": 1.079,
+        "profit": -51.2,
+        "reason": "sl",
+        "swap": 0,
+        "symbol": "EURUSD",
+        "ticket": 771203498,
+        "time_msc": 1794071102540,
+        "type": "sell",
+        "volume": 0.1
+      }
+    ],
+    "symbol_busy_unknown": {
+      "blocking": [
+        {
+          "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+          "state": "unknown"
+        }
+      ],
+      "error": "symbol_busy",
+      "message": "Nothing was sent: an earlier request on this symbol has no known outcome yet. Look it up.",
+      "not_sent": true
+    }
+  },
+  "cases": [
+    {
+      "id": "t-completed",
+      "title": "200 completed is returned",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-placed",
+      "title": "200 placed is returned",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_placed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "placed",
+            "kind": "placed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-partial",
+      "title": "200 partial is returned and is final",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_partial"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "partial",
+            "kind": "partial",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-executed",
+      "title": "200 executed (a key sent again, settled by an operator) is returned",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_executed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "executed",
+            "kind": "executed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190",
+            "settlement": "operator"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-pending",
+      "title": "202 pending is returned; nothing is sent again",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 202,
+            "body": {
+              "use": "request_pending"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "pending",
+            "kind": "pending",
+            "http_status": 202,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-unknown",
+      "title": "202 unknown is returned",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 202,
+            "body": {
+              "use": "request_unknown"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "unknown",
+            "kind": "unknown",
+            "http_status": 202,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-rejected",
+      "title": "422 trade_rejected is returned as a rejected request, not raised, not retried",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 422,
+            "body": {
+              "use": "request_rejected"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "rejected",
+            "kind": "rejected",
+            "http_status": 422,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190",
+            "retcode": 10016,
+            "retcode_name": "TRADE_RETCODE_INVALID_STOPS"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-not-sent",
+      "title": "503 not_sent is returned as a not_sent request, not retried (the same key replays it)",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "use": "request_not_sent"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "not_sent",
+            "kind": "not_sent",
+            "http_status": 503,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-not-executed-evidence",
+      "title": "409 not_executed settled by evidence is returned",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "body": {
+              "use": "request_not_executed_evidence"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "not_executed",
+            "kind": "not_executed",
+            "http_status": 409,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190",
+            "settlement": "evidence"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-not-executed-operator",
+      "title": "409 not_executed settled by an operator is returned",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "body": {
+              "use": "request_not_executed_operator"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "not_executed",
+            "kind": "not_executed",
+            "http_status": 409,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190",
+            "settlement": "operator"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-future-state",
+      "title": "a recorded request in a state this SDK does not know is returned as it is",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_future_state"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "superseded",
+            "kind": "unrecognised",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-busy-retry-after-then-ok",
+      "title": "409 symbol_busy with Retry-After waits that long, then the same key is sent again",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "sleeps": [
+          {
+            "min": 1.0
+          }
+        ],
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-busy-retry-after-exhausted",
+      "title": "409 symbol_busy with Retry-After on every attempt raises SymbolBusy: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "SymbolBusy",
+          "code": "symbol_busy",
+          "retry_after": 1,
+          "blocking": [
+            "req_5f0c2a9e41d7b3a8c6e2f190"
+          ]
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-busy-no-retry-after",
+      "title": "409 symbol_busy without Retry-After is not retried",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "body": {
+              "use": "symbol_busy_unknown"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "SymbolBusy",
+          "code": "symbol_busy",
+          "retry_after": null,
+          "blocking": [
+            "req_5f0c2a9e41d7b3a8c6e2f190"
+          ]
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-busy-turns-unknown",
+      "title": "the blocker turns unknown between attempts: the retry stops",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 409,
+            "body": {
+              "use": "symbol_busy_unknown"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "SymbolBusy",
+          "retry_after": null
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-engine-busy-then-ok",
+      "title": "503 engine_busy is retried with the same key",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_busy",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-engine-busy-exhausted",
+      "title": "503 engine_busy on every attempt raises EngineBusy: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_busy",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_busy",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_busy",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "EngineBusy",
+          "code": "engine_busy"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-connect-failed-then-ok",
+      "title": "a connection that never opened is retried",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "connect"
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-connect-failed-exhausted",
+      "title": "a connection that never opened, every time, raises APIConnectionError: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "connect"
+        },
+        {
+          "fail": "connect"
+        },
+        {
+          "fail": "connect"
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "APIConnectionError"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-unavailable-then-ok",
+      "title": "503 engine_unavailable: the same key returns or sends",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-timeout-then-pending",
+      "title": "504 engine_timeout: the same key returns the recorded request as it stands",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "engine_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 202,
+            "body": {
+              "use": "request_pending"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "pending",
+            "kind": "pending",
+            "http_status": 202,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-unavailable-exhausted",
+      "title": "503 engine_unavailable on every attempt raises OutcomeUnknown with the key",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIError",
+          "cause_code": "engine_unavailable"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-lost-then-ok",
+      "title": "the request was written and the answer lost: retried with the same key",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-lost-exhausted",
+      "title": "the answer is lost every time: OutcomeUnknown",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "fail": "after_write"
+        },
+        {
+          "fail": "after_write"
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIConnectionError"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-lost-then-401",
+      "title": "a lost answer, then 401 (the key was rolled): still OutcomeUnknown, never AuthenticationError alone",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 401,
+            "body": {
+              "error": "invalid_api_key",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "AuthenticationError",
+          "cause_code": "invalid_api_key"
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-lost-then-404",
+      "title": "a lost answer, then 404 no_such_account: OutcomeUnknown",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 404,
+            "body": {
+              "error": "no_such_account",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "NotFound",
+          "cause_code": "no_such_account"
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-timeout-then-engine-busy",
+      "title": "504 engine_timeout, then engine_busy until retries run out: OutcomeUnknown, not EngineBusy",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "engine_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_busy",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_busy",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "EngineBusy",
+          "cause_code": "engine_busy"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-lost-then-kill-switch",
+      "title": "a lost answer, then 423 kill_switch_engaged: OutcomeUnknown with KillSwitchEngaged as its cause",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 423,
+            "body": {
+              "error": "kill_switch_engaged",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "KillSwitchEngaged",
+          "cause_code": "kill_switch_engaged"
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-lost-then-billing-hold",
+      "title": "a lost answer, then 423 billing_hold: OutcomeUnknown with BillingHold as its cause",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 423,
+            "body": {
+              "error": "billing_hold",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "BillingHold",
+          "cause_code": "billing_hold"
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-timeout-then-busy",
+      "title": "504 engine_timeout, then symbol_busy until retries run out: OutcomeUnknown",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "engine_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "SymbolBusy",
+          "cause_code": "symbol_busy"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-lost-then-connect-failed",
+      "title": "a lost answer, then connections that never open: OutcomeUnknown",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "fail": "connect"
+        },
+        {
+          "fail": "connect"
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIConnectionError"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-lost-then-invalid",
+      "title": "a lost answer, then 422 invalid_request: OutcomeUnknown",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 422,
+            "body": {
+              "error": "invalid_request",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "InvalidRequest",
+          "cause_code": "invalid_request"
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-lost-then-rejected",
+      "title": "a lost answer, then the recorded request comes back rejected: returned",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 422,
+            "body": {
+              "use": "request_rejected"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "rejected",
+            "kind": "rejected",
+            "http_status": 422,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-html-502-then-ok",
+      "title": "a 502 page that is not the API's JSON counts as maybe sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 502,
+            "headers": {
+              "Content-Type": "text/html"
+            },
+            "text": "<html><body>Bad gateway</body></html>"
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-200-not-json-exhausted",
+      "title": "a 200 that is never JSON ends as OutcomeUnknown, never a bare parse error",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "text": "<html>"
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "text": "<html>"
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "text": "<html>"
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIError",
+          "status": 200
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-200-cut-short-then-ok",
+      "title": "a 200 whose body cannot be read to the end is retried with the same key",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body_error": true
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-200-wrong-shape-then-ok",
+      "title": "a 200 that is JSON but not a recorded request is retried with the same key",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-409-wrong-shape",
+      "title": "a refusal status without a string error code counts as maybe sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "body": {
+              "detail": "?"
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 409,
+            "body": {
+              "detail": "?"
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 409,
+            "body": {
+              "detail": "?"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIError",
+          "status": 409
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-cloudflare-1010",
+      "title": "403 error code: 1010 is Cloudflare refusing the client: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 403,
+            "headers": {
+              "Content-Type": "text/plain"
+            },
+            "text": "error code: 1010"
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "APIError",
+          "status": 403
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-lost-then-cloudflare-1010",
+      "title": "a lost answer, then Cloudflare's 403: OutcomeUnknown",
+      "call": "place_order",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 403,
+            "text": "error code: 1010"
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIError",
+          "status": 403
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-400-no-body",
+      "title": "400 with no body (a ticket that is not a whole number) is InvalidRequest",
+      "call": "cancel_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 400,
+            "text": ""
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "InvalidRequest",
+          "status": 400
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-missing-api-key",
+      "title": "401 missing_api_key raises AuthenticationError at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 401,
+            "body": {
+              "error": "missing_api_key",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "AuthenticationError",
+          "code": "missing_api_key",
+          "status": 401
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-invalid-api-key",
+      "title": "401 invalid_api_key raises AuthenticationError at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 401,
+            "body": {
+              "error": "invalid_api_key",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "AuthenticationError",
+          "code": "invalid_api_key",
+          "status": 401
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-no-such-account",
+      "title": "404 no_such_account raises NotFound at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 404,
+            "body": {
+              "error": "no_such_account",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "NotFound",
+          "code": "no_such_account",
+          "status": 404
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-invalid-request",
+      "title": "422 invalid_request raises InvalidRequest at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 422,
+            "body": {
+              "error": "invalid_request",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "InvalidRequest",
+          "code": "invalid_request",
+          "status": 422
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-magic-reserved",
+      "title": "422 magic_reserved raises InvalidRequest at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 422,
+            "body": {
+              "error": "magic_reserved",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "InvalidRequest",
+          "code": "magic_reserved",
+          "status": 422
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-kill-switch-engaged",
+      "title": "423 kill_switch_engaged raises KillSwitchEngaged at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 423,
+            "body": {
+              "error": "kill_switch_engaged",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "KillSwitchEngaged",
+          "code": "kill_switch_engaged",
+          "status": 423
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-billing-hold",
+      "title": "423 billing_hold raises BillingHold at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 423,
+            "body": {
+              "error": "billing_hold",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "BillingHold",
+          "code": "billing_hold",
+          "status": 423
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-account-not-connected",
+      "title": "503 account_not_connected raises AccountUnavailable at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "account_not_connected",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "AccountUnavailable",
+          "code": "account_not_connected",
+          "status": 503
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-bridge-outdated",
+      "title": "503 bridge_outdated raises AccountUnavailable at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "bridge_outdated",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "AccountUnavailable",
+          "code": "bridge_outdated",
+          "status": 503
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-stop-account-restarting",
+      "title": "503 account_restarting raises AccountUnavailable at once: nothing was sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "account_restarting",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "AccountUnavailable",
+          "code": "account_restarting",
+          "status": 503
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-cancel-no-such-order",
+      "title": "404 no_such_order on a cancel raises NotFound",
+      "call": "cancel_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 404,
+            "body": {
+              "error": "no_such_order",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "NotFound",
+          "code": "no_such_order"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-cancel-terminal-timeout-then-ok",
+      "title": "504 terminal_timeout on a cancel recorded nothing: retried with the same key",
+      "call": "cancel_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "terminal_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-cancel-terminal-timeout-exhausted",
+      "title": "504 terminal_timeout every time raises TerminalTimeout, not OutcomeUnknown",
+      "call": "cancel_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "terminal_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "terminal_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "terminal_timeout",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "TerminalTimeout",
+          "code": "terminal_timeout"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-new-5xx-code",
+      "title": "an unknown code on a 5xx counts as maybe sent",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "brand_new_code",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "brand_new_code",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "brand_new_code",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIError",
+          "cause_code": "brand_new_code"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-new-4xx-code",
+      "title": "an unknown code on a 4xx raises a plain APIError at once",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 418,
+            "body": {
+              "error": "brand_new_code",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "APIError",
+          "code": "brand_new_code",
+          "status": 418
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-deadline-passed",
+      "title": "no new attempt starts after the retry deadline",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          },
+          "elapsed": 61
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIError",
+          "cause_code": "engine_unavailable"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-retry-after-past-deadline",
+      "title": "a Retry-After that would end after the deadline is not waited for",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 409,
+            "headers": {
+              "Retry-After": "1"
+            },
+            "body": {
+              "use": "symbol_busy"
+            }
+          },
+          "elapsed": 59.5
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "SymbolBusy",
+          "retry_after": 1
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-no-retries",
+      "title": "max_retries 0 gives the first answer's outcome",
+      "call": "place_order",
+      "options": {
+        "max_retries": 0
+      },
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIError",
+          "cause_code": "engine_unavailable"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "t-backoff",
+      "title": "without Retry-After the waits are 0.5 s then 1 s nominal, each times a random factor from 0.5 to 1",
+      "call": "place_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "sleeps": [
+          {
+            "min": 0.25,
+            "max": 0.5
+          },
+          {
+            "min": 0.5,
+            "max": 1.0
+          }
+        ],
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-own-key",
+      "title": "a key the caller passes is sent on every attempt and handed back",
+      "call": "place_order",
+      "idempotency_key": "rebalance-0412",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_completed"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "completed",
+            "kind": "completed",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190",
+            "idempotency_key": "rebalance-0412"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "t-own-key-on-error",
+      "title": "the caller's key is on OutcomeUnknown",
+      "call": "place_order",
+      "idempotency_key": "rebalance-0412",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "fail": "after_write"
+        },
+        {
+          "fail": "after_write"
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "OutcomeUnknown",
+          "cause": "APIConnectionError",
+          "idempotency_key": "rebalance-0412"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "t-bad-key-reserved-prefix",
+      "title": "a key that starts with hk: is refused before anything is sent",
+      "call": "place_order",
+      "idempotency_key": "hk:plan:1",
+      "attempts": [],
+      "expect": {
+        "raise": {
+          "error": "ArgumentError"
+        },
+        "attempts": 0
+      }
+    },
+    {
+      "id": "t-bad-key-empty",
+      "title": "a key that is empty is refused before anything is sent",
+      "call": "place_order",
+      "idempotency_key": "",
+      "attempts": [],
+      "expect": {
+        "raise": {
+          "error": "ArgumentError"
+        },
+        "attempts": 0
+      }
+    },
+    {
+      "id": "t-bad-key-too-long",
+      "title": "a key that is longer than 128 characters is refused before anything is sent",
+      "call": "place_order",
+      "idempotency_key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "attempts": [],
+      "expect": {
+        "raise": {
+          "error": "ArgumentError"
+        },
+        "attempts": 0
+      }
+    },
+    {
+      "id": "t-bad-key-control-character",
+      "title": "a key that has a control character is refused before anything is sent",
+      "call": "place_order",
+      "idempotency_key": "two\nlines",
+      "attempts": [],
+      "expect": {
+        "raise": {
+          "error": "ArgumentError"
+        },
+        "attempts": 0
+      }
+    },
+    {
+      "id": "r-ok",
+      "title": "a read returns the body",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "positions"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "json": {
+            "use": "positions"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "r-unavailable-then-ok",
+      "title": "a read retries 503 engine_unavailable",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "positions"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "json": {
+            "use": "positions"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "r-unavailable-exhausted",
+      "title": "a read that never gets through raises Unavailable, not OutcomeUnknown",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "engine_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "Unavailable",
+          "code": "engine_unavailable"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "r-terminal-timeout-then-ok",
+      "title": "a read retries 504 terminal_timeout",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "respond": {
+            "status": 504,
+            "body": {
+              "error": "terminal_timeout",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "positions"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "json": {
+            "use": "positions"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "r-terminal-error-once",
+      "title": "503 terminal_error is retried once only",
+      "call": "list_symbols",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "terminal_error",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "terminal_error",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "TerminalError",
+          "code": "terminal_error"
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "r-lost-then-ok",
+      "title": "a read retries a lost answer",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "positions"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "json": {
+            "use": "positions"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "r-lost-exhausted",
+      "title": "a read whose answer is always lost raises APIConnectionError",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "fail": "after_write"
+        },
+        {
+          "fail": "after_write"
+        },
+        {
+          "fail": "after_write"
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "APIConnectionError"
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "r-not-connected",
+      "title": "503 account_not_connected stops a read",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "account_not_connected",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "AccountUnavailable",
+          "code": "account_not_connected"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "r-no-price",
+      "title": "503 no_price is not retried (the terminal already waited)",
+      "call": "get_tick",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "no_price",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "NoPrice",
+          "code": "no_price"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "r-no-such-symbol",
+      "title": "404 no_such_symbol raises NotFound",
+      "call": "get_tick",
+      "attempts": [
+        {
+          "respond": {
+            "status": 404,
+            "body": {
+              "error": "no_such_symbol",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "NotFound",
+          "code": "no_such_symbol"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "r-range-too-large",
+      "title": "422 range_too_large raises RangeTooLarge",
+      "call": "history_deals",
+      "attempts": [
+        {
+          "respond": {
+            "status": 422,
+            "body": {
+              "error": "range_too_large",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "RangeTooLarge",
+          "code": "range_too_large"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "r-bad-command",
+      "title": "503 bad_command stops a history read",
+      "call": "history_deals",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "bad_command",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "TerminalError",
+          "code": "bad_command"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "r-symbol-too-large",
+      "title": "503 symbol_too_large stops",
+      "call": "list_symbols",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "symbol_too_large",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "TerminalError",
+          "code": "symbol_too_large"
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "r-not-json-exhausted",
+      "title": "a read whose answer is never JSON raises APIError",
+      "call": "list_positions",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "text": "<html>"
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "text": "<html>"
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "text": "<html>"
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "APIError",
+          "status": 200
+        },
+        "attempts": 3
+      }
+    },
+    {
+      "id": "r-get-request-any-state",
+      "title": "looking a request up returns it whatever its state",
+      "call": "get_request",
+      "attempts": [
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "request_rejected"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "trade_request": {
+            "state": "rejected",
+            "kind": "rejected",
+            "http_status": 200,
+            "id": "req_5f0c2a9e41d7b3a8c6e2f190"
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "c-check-unavailable-then-ok",
+      "title": "check sends nothing to the broker and retries like a read",
+      "call": "check_order",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "sent": {
+                "action": "deal",
+                "comment": "",
+                "deviation": 0,
+                "expiration": 0,
+                "magic": 0,
+                "order": 0,
+                "position": 0,
+                "position_by": 0,
+                "price": 0,
+                "sl": 1.079,
+                "stoplimit": 0,
+                "symbol": "EURUSD",
+                "tp": 0,
+                "type": "buy",
+                "type_filling": "ioc",
+                "type_time": "gtc",
+                "volume": 0.1
+              },
+              "result": {
+                "passed": true,
+                "retcode": 0,
+                "retcode_name": "OK",
+                "comment": "Done",
+                "balance": 10000,
+                "equity": 10000,
+                "profit": 0,
+                "margin": 21.68,
+                "margin_free": 9978.32,
+                "margin_level": 46125.46
+              },
+              "message": "The order would pass."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "json_has": [
+            "sent",
+            "result",
+            "message"
+          ]
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "k-engage-unavailable-then-ok",
+      "title": "engaging the kill switch takes no key and is retried",
+      "call": "engage_kill_switch",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 200,
+            "body": {
+              "use": "kill_switch_outcome"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "return": {
+          "json": {
+            "use": "kill_switch_outcome"
+          }
+        },
+        "attempts": 2
+      }
+    },
+    {
+      "id": "k-engage-not-connected",
+      "title": "503 account_not_connected on engage raises AccountUnavailable carrying the kill_switch view: it is engaged",
+      "call": "engage_kill_switch",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "use": "kill_switch_not_connected"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "AccountUnavailable",
+          "code": "account_not_connected",
+          "kill_switch": {
+            "engaged": true
+          }
+        },
+        "attempts": 1
+      }
+    },
+    {
+      "id": "k-engage-exhausted",
+      "title": "engage that never gets through raises Unavailable",
+      "call": "engage_kill_switch",
+      "attempts": [
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        },
+        {
+          "respond": {
+            "status": 503,
+            "body": {
+              "error": "engine_unavailable",
+              "message": "..."
+            }
+          }
+        }
+      ],
+      "expect": {
+        "raise": {
+          "error": "Unavailable",
+          "code": "engine_unavailable"
+        },
+        "attempts": 3
+      }
+    }
+  ]
+}
