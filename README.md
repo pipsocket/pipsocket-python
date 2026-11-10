@@ -28,7 +28,8 @@ Make your workspace's API key on the dashboard's **API key** page, where your ac
 listed too, and put the key in `PIPSOCKET_KEY`. Use a demo account while you try things.
 
 Each symbol allows its own filling modes, and MT5 rejects an order with any other (retcode
-10030), so read them, and the smallest volume, from the symbol rather than assuming one:
+10030), so read them, and the smallest volume, from the symbol rather than assuming one. A market
+order can use `fok` or `ioc` (`boc` is for limit orders only):
 
 ```python
 from pipsocket import Pipsocket
@@ -38,7 +39,9 @@ acct = ps.account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
 
 print(acct.get()["balance"])
 eurusd = acct.symbols.get("EURUSD")
-filling = eurusd["filling_modes"][0]  # one the symbol allows
+filling = next((mode for mode in ("fok", "ioc") if mode in eurusd["filling_modes"]), None)
+if filling is None:
+    raise SystemExit("EURUSD allows neither fok nor ioc, the filling modes a market order can use")
 volume = eurusd["volume_min"]
 
 order = acct.orders.place(symbol="EURUSD", type="buy", volume=volume, type_filling=filling)
@@ -238,7 +241,11 @@ def note(entry: dict[str, object]) -> None:
 
 
 eurusd = acct.symbols.get("EURUSD")
-filling, volume = eurusd["filling_modes"][0], eurusd["volume_min"]
+# A filling mode the symbol allows that a market order can use (fok or ioc), and its smallest volume.
+filling = next((mode for mode in ("fok", "ioc") if mode in eurusd["filling_modes"]), None)
+if filling is None:
+    raise SystemExit("EURUSD allows neither fok nor ioc, the filling modes a market order can use")
+volume = eurusd["volume_min"]
 key = pipsocket.new_key()
 note({"key": key, "symbol": "EURUSD", "volume": volume})  # saved before it is sent
 
