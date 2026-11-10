@@ -3,7 +3,7 @@
 Python client for the Pipsocket API: trade MetaTrader 5 accounts hosted by Pipsocket from Linux,
 macOS or Windows.
 
-> **Alpha.** This release has every REST call. The stream helper follows in the next alpha.
+> **Alpha.** The calls and their behaviour may still change before 0.1.0.
 
 ## Why
 
@@ -21,7 +21,8 @@ terminal on your machine, and typed answers.
 pip install --pre pipsocket
 ```
 
-Python 3.10 or later. Its dependency is [httpx](https://www.python-httpx.org).
+Python 3.10 or later. Its dependencies are [httpx](https://www.python-httpx.org) and
+[websockets](https://websockets.readthedocs.io).
 
 ## Quickstart
 
@@ -115,6 +116,54 @@ match request.state:
 those who prefer exceptions. `orders.check(...)` is MT5's dry run of an order and sends nothing to
 the broker. A state this SDK doesn't know yet comes through as its string,
 neither accepted nor final. See [Errors and retcodes](https://docs.pipsocket.com/errors).
+
+## Streaming
+
+`acct.stream(...)` keeps the account's WebSocket open: fills, deals, prices and the account as they
+happen, reconnected for you.
+
+```python
+from pipsocket import Pipsocket, TradeRequest
+
+acct = Pipsocket().account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
+
+with acct.stream(ticks=["EURUSD"]) as events:
+    for event in events:
+        match event["type"]:
+            case "resync":  # after every (re)connection or gap: a new baseline
+                print("resync:", event["reason"], len(event["positions"] or []), "positions")
+            case "tick":
+                print(event["symbol"], event["bid"], event["ask"])
+            case "request":
+                print("settled:", TradeRequest.from_event(event).state)
+                break
+```
+
+Events are the API's messages as they are (see [the WebSocket stream](https://docs.pipsocket.com/websocket)),
+plus one the SDK adds, `resync`. The helper sends the tick set again after every reconnect,
+answers the keep-alive, and resyncs when the socket was closed, the stream said `lagged`, the
+account's host came back, or your code fell behind (`reason`: `connected`, `reconnected`,
+`lagged`, `host_back`, `overflow`).
+
+What a `resync` gives:
+
+- **A new baseline**: `account`, `positions` and `orders` read over REST after the stream was
+  live. Replace your own state with it. `positions` and `orders` are `None` when the terminal
+  isn't running, which is not the same as empty.
+- **History since the last checkpoint**, best effort: `history` has the `deals` and `orders` from
+  the broker's server time `from` to `to`, or is `None` with `history_reason` saying why
+  (`no_checkpoint`, `account_changed`, `range_too_large` or `unavailable`).
+- Every deal, request, transaction and status event from then on, delivered after it.
+
+What it doesn't give: one moment in time (the reads happen one after another), an order between
+events and the snapshot (events are notices, not deltas: never add them to the snapshot), or
+ticks and transaction events from a gap, which are gone. Deduplicate deals and orders by ticket
+and requests by id, and read again when exact state matters. `snapshot=False` sends `resync`
+without reading anything. `AsyncPipsocket` has the same helper, with `async with` and
+`async for`.
+
+While a stream is open on an account handle, `acct.requests.wait(id)` ends as soon as the stream
+sees the request settle.
 
 ## Errors, retries and idempotency keys
 

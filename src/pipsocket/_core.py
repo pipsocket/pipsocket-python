@@ -496,6 +496,17 @@ def refusal(
     return kind(text, status=status, code=code, body=body, raw=raw)
 
 
+def refusal_from_body(status: int, body: Any, raw: bytes = b"") -> APIError:
+    """The error for a refusal that didn't come from a REST call (a stream's answer or its
+    upgrade): the exception its code maps to, or a plain APIError."""
+    fields = cast(dict[str, Any], body) if isinstance(body, dict) else {}
+    code = fields.get("error")
+    if not isinstance(code, str):
+        return APIError(f"Refused ({status}).", status=status, code=None, body=body, raw=raw)
+    spec = Spec("stream", "GET", "", Kind.SAFE)
+    return refusal(spec, status, code, fields, raw, None)
+
+
 def parse_json(raw: bytes) -> tuple[bool, Any]:
     try:
         return True, json.loads(raw)
@@ -653,7 +664,8 @@ WaitStep = Look | Wait
 def drive_wait(
     timeout: float, clock: Callable[[], float]
 ) -> Generator[WaitStep, TradeRequest | PipsocketError | None, TradeRequest]:
-    """Yields Look (send back the TradeRequest or the error the lookup raised) or Wait.
+    """Yields Look (send back the TradeRequest or the error the lookup raised) or Wait (send
+    back None, or a request an open stream saw in the meantime).
 
     Ends with the request when it is final, or as it stands when the timeout passes. It never
     raises for "still pending" and only ever looks up. A 401 or 404 is raised at once: those
@@ -683,7 +695,13 @@ def drive_wait(
 
         left = deadline - clock()
         if left > 0:
-            yield Wait(min(interval, left))
+            seen = yield Wait(min(interval, left))
+            if isinstance(seen, TradeRequest):
+                # From a stream's request event: the same request, and events only come when a
+                # request settles. A final state is never replaced by an older, outstanding one.
+                latest = seen
+                if seen.final:
+                    return seen
             interval = min(interval * POLL_GROWTH, LONGEST_POLL)
             left = deadline - clock()
         if left <= 0:

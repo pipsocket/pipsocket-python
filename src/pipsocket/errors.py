@@ -28,6 +28,8 @@ __all__ = [
     "OutcomeUnknown",
     "PipsocketError",
     "RangeTooLarge",
+    "StreamError",
+    "StreamHandshakeError",
     "SymbolBusy",
     "TerminalError",
     "TerminalTimeout",
@@ -220,6 +222,21 @@ class TradeNotAccepted(PipsocketError):
     def __init__(self, request: TradeRequest) -> None:
         super().__init__(f"Request {request.id} is {request.state}: {request.message}")
         self.request = request
+
+
+class StreamError(PipsocketError):
+    """The stream helper stopped for a reason that isn't one of the API's refusals."""
+
+
+class StreamHandshakeError(StreamError):
+    """The stream's upgrade was refused with a status that won't change by trying again (such
+    as 426), or no status the SDK could act on. `status` is the HTTP status, if there was one."""
+
+    status: int | None
+
+    def __init__(self, message: str, *, status: int | None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 # The API's error codes and the exception each raises. Codes not listed raise a plain APIError.
