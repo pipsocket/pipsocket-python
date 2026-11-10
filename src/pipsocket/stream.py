@@ -426,6 +426,12 @@ class _AsyncSink:
         self.ready.set()
         return []
 
+    def close(self) -> None:
+        """The caller closed the stream: nothing still queued is delivered."""
+        self.items.clear()
+        self.items.append(_End(None))
+        self.ready.set()
+
     async def get(self) -> Event | _End:
         while not self.items:
             self.ready.clear()
@@ -503,9 +509,12 @@ class AsyncStream:
         self._engine.feed(core.SetTicks(tuple(symbols)))
 
     async def close(self) -> None:
-        """Close the stream. Waiting wait() calls carry on polling over REST."""
+        """Close the stream. Iteration ends at once: events still queued are not delivered.
+        Waiting wait() calls carry on polling over REST."""
         if self in self._streams:
             self._streams.remove(self)
+        if self._ended is None:
+            self._sink.close()
         if self._task is None:
             return
         self._engine.feed(core.Close())
@@ -535,6 +544,13 @@ class _ThreadSink:
             self.items.append(item)
             self.ready.notify_all()
             return []
+
+    def close(self) -> None:
+        """The caller closed the stream: nothing still queued is delivered."""
+        with self.ready:
+            self.items.clear()
+            self.items.append(_End(None))
+            self.ready.notify_all()
 
     def get(self) -> Event | _End:
         with self.ready:
@@ -645,9 +661,13 @@ class Stream:
         self._feed(core.SetTicks(tuple(symbols)))
 
     def close(self) -> None:
-        """Close the stream. Waiting wait() calls carry on polling over REST."""
+        """Close the stream. Iteration ends at once, from any thread (a `for` loop blocked
+        waiting for an event wakes and stops): events still queued are not delivered. Waiting
+        wait() calls carry on polling over REST."""
         if self in self._streams:
             self._streams.remove(self)
+        if self._ended is None:
+            self._sink.close()
         self._feed(core.Close())
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join()

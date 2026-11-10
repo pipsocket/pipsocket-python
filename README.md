@@ -3,8 +3,6 @@
 Python client for the Pipsocket API: trade MetaTrader 5 accounts hosted by Pipsocket from Linux,
 macOS or Windows.
 
-> **Alpha.** The calls and their behaviour may still change before 0.1.0.
-
 ## Why
 
 The terminal runs at Pipsocket, so your code runs anywhere Python does: one `pip install`, no
@@ -18,7 +16,7 @@ terminal on your machine, and typed answers.
 ## Install
 
 ```bash
-pip install --pre pipsocket
+pip install pipsocket
 ```
 
 Python 3.10 or later. Its dependencies are [httpx](https://www.python-httpx.org) and
@@ -29,6 +27,9 @@ Python 3.10 or later. Its dependencies are [httpx](https://www.python-httpx.org)
 Make your workspace's API key on the dashboard's **API key** page, where your accounts' ids are
 listed too, and put the key in `PIPSOCKET_KEY`. Use a demo account while you try things.
 
+Each symbol allows its own filling modes, and MT5 rejects an order with any other (retcode
+10030), so read them, and the smallest volume, from the symbol rather than assuming one:
+
 ```python
 from pipsocket import Pipsocket
 
@@ -36,40 +37,41 @@ ps = Pipsocket()  # reads PIPSOCKET_KEY
 acct = ps.account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
 
 print(acct.get()["balance"])
-eurusd = acct.symbols.get("EURUSD")  # filling_modes, volume_min, volume_step, ...
+eurusd = acct.symbols.get("EURUSD")
+filling = eurusd["filling_modes"][0]  # one the symbol allows
+volume = eurusd["volume_min"]
 
-order = acct.orders.place(symbol="EURUSD", type="buy", volume=0.01, type_filling="ioc")
+order = acct.orders.place(symbol="EURUSD", type="buy", volume=volume, type_filling=filling)
 if order.outstanding:  # pending or unknown: it may still execute
     order = acct.requests.wait(order.id)
 
-match order.state:
-    case "completed":
-        print("filled:", order.result["deal"], "at", order.result["price"])
-        # On a hedging account the position's ticket is the order's.
-        position = order.result["position"] or order.result["order"]
-        closed = acct.positions.close(position, volume=0.01, type_filling="ioc")
-        print("closed:", closed.state)
-    case "rejected":
-        print("rejected:", order.retcode_name)
-    case _:
-        print(order.state, order.message)
+if order.accepted and order.result["deal"]:  # MT5 took it and made a deal: filled
+    print("filled:", order.result["deal"], "at", order.result["price"])
+    # On a hedging account the position's ticket is the order's.
+    position = order.result["position"] or order.result["order"]
+    closed = acct.positions.close(position, volume=volume, type_filling=filling)
+    print("closed:", closed.state)
+elif order.state == "rejected":
+    print("rejected:", order.retcode_name)
+else:
+    print(order.state, order.message)
 ```
 
 Answers are plain dicts, typed with `TypedDict`s from the API's OpenAPI document
 (`pipsocket.types`), so they go straight into anything that takes dicts:
 
 ```python
-import datetime
-
 from pipsocket import Pipsocket
 
 acct = Pipsocket().account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
 
-# History ranges are the broker's server time in seconds, both ends included, not UTC.
-day = int(datetime.datetime(2026, 11, 9, tzinfo=datetime.timezone.utc).timestamp())
-deals = acct.history.deals(day, day + 86399)
-profit = sum(deal["profit"] for deal in deals)
-print(len(deals), "deals,", profit)
+# History ranges are the broker's server time in seconds, both ends included, not UTC: take
+# them from the account's server_time (None until its terminal has reported).
+now = acct.get()["server_time"]
+if now is not None:
+    deals = acct.history.deals(now - 86400, now)  # the last 24 hours
+    profit = sum(deal["profit"] for deal in deals)
+    print(len(deals), "deals,", profit)
 ```
 
 ## Order outcomes
@@ -93,7 +95,10 @@ acct = Pipsocket().account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
 request = acct.requests.get("req_5f0c2a9e41d7b3a8c6e2f190")
 match request.state:
     case "completed" | "placed" | "partial":
-        print("filled or placed:", request.result["order"], request.result["deal"])
+        if request.result["deal"]:
+            print("filled: deal", request.result["deal"])
+        else:  # a pending order placed, or a change made: no deal
+            print("done, no deal: order", request.result["order"])
     case "rejected":
         print("MT5 rejected it:", request.retcode, request.retcode_name)
     case "pending" | "unknown":
@@ -104,13 +109,21 @@ match request.state:
 
 | `state` | Meaning |
 | --- | --- |
-| `completed`, `placed`, `partial` | MT5 took it. `result` is MT5's answer. Final. |
+| `completed` | MT5 completed the request (retcode 10009). Not necessarily a fill: see below. Final. |
+| `placed` | MT5 placed it (retcode 10008), such as a pending order. Final. |
+| `partial` | MT5 completed part of it (retcode 10010). Final. |
 | `rejected` | MT5 rejected it: `retcode` says why. Final. |
 | `pending` | Sent, no answer from the trade server yet. Never sent again. |
 | `unknown` | No answer within 130 seconds: it may have executed. Settled by proof only. |
 | `not_sent` | The terminal didn't send it: `result["error"]` says why. Final. |
 | `not_executed` | Was `unknown`, settled as never executed (`settlement` says by whom). Final. |
 | `executed` | Was `unknown`, settled as executed by the account's owner. Final. |
+
+`completed` means MT5 completed the request, whatever it was: a market order filled, but also a
+pending order placed, an order modified or cancelled, or stops set. So `accepted` (completed,
+placed or partial) says MT5 took the request, not that anything filled. A fill shows as a deal:
+`result["deal"]` is non-zero (and `sent["action"]` is `"deal"`). A pending order that was placed
+has `result["order"]` set and `result["deal"]` 0.
 
 `raise_for_state()` raises `TradeNotAccepted` for `rejected`, `not_sent` and `not_executed`, for
 those who prefer exceptions. `orders.check(...)` is MT5's dry run of an order and sends nothing to
@@ -119,8 +132,8 @@ neither accepted nor final. See [Errors and retcodes](https://docs.pipsocket.com
 
 ## Streaming
 
-`acct.stream(...)` keeps the account's WebSocket open: fills, deals, prices and the account as they
-happen, reconnected for you.
+`acct.stream(...)` keeps the account's WebSocket open: requests settling, deals, prices and the
+account as they happen, reconnected for you.
 
 ```python
 from pipsocket import Pipsocket, TradeRequest
@@ -156,11 +169,21 @@ What a `resync` gives:
 - Every deal, request, transaction and status event from then on, delivered after it.
 
 What it doesn't give: one moment in time (the reads happen one after another), an order between
-events and the snapshot (events are notices, not deltas: never add them to the snapshot), or
-ticks and transaction events from a gap, which are gone. Deduplicate deals and orders by ticket
-and requests by id, and read again when exact state matters. `snapshot=False` sends `resync`
-without reading anything. `AsyncPipsocket` has the same helper, with `async with` and
-`async for`.
+events and the snapshot (events are notices, not deltas: never add them to the snapshot), or the
+events from a gap. **Events that happened while the stream was away are not replayed**, `request`
+events included: the resync's snapshot and `history` cover what changed, and for a request you
+are waiting on, `acct.requests.wait(id)` looks it up over REST. Ticks and transaction events from
+a gap are gone. Deduplicate deals and orders by ticket and requests by id, and read again when
+exact state matters. `snapshot=False` sends `resync` without reading anything.
+
+A resync's `history` starts 5 minutes before its checkpoint (the newest broker time the stream
+delivered), so it can include deals from before you opened the stream; deals the stream already
+delivered as events are left out of it.
+
+The sync iterator (`for event in events`) blocks until an event arrives. To stop it, break out of
+the loop, or call `events.close()` from another thread: iteration then ends at once, and events
+still queued are not delivered. `AsyncPipsocket` has the same helper, with `async with` and
+`async for`, where cancelling the task stops it too.
 
 While a stream is open on an account handle, `acct.requests.wait(id)` ends as soon as the stream
 sees the request settle.
@@ -214,12 +237,14 @@ def note(entry: dict[str, object]) -> None:
         file.write(json.dumps(entry) + "\n")
 
 
+eurusd = acct.symbols.get("EURUSD")
+filling, volume = eurusd["filling_modes"][0], eurusd["volume_min"]
 key = pipsocket.new_key()
-note({"key": key, "symbol": "EURUSD", "volume": 0.01})  # saved before it is sent
+note({"key": key, "symbol": "EURUSD", "volume": volume})  # saved before it is sent
 
 try:
     order = acct.orders.place(
-        symbol="EURUSD", type="buy", volume=0.01, type_filling="ioc", idempotency_key=key
+        symbol="EURUSD", type="buy", volume=volume, type_filling=filling, idempotency_key=key
     )
 except OutcomeUnknown as error:
     # The entry stays open: after a restart, resolve it with the same key.
@@ -290,8 +315,8 @@ in an error message by this SDK.
 
 ## Versioning and support
 
-Versions follow semver and stay below 1.0 for now: a minor release may change the API of this
-SDK, and the changelog says how. Report bugs in this SDK on
+Versions follow semver and are 0.x for now: until 1.0, a minor release (0.2, 0.3) may change
+the API of this SDK, and the changelog says how. Report bugs in this SDK on
 [GitHub issues](https://github.com/pipsocket/pipsocket-python/issues). Questions about your account
 or billing go to [support@pipsocket.com](mailto:support@pipsocket.com).
 
