@@ -12,11 +12,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import threading
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable, Iterable
 from types import TracebackType
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI
@@ -31,6 +32,7 @@ from .errors import (
     StreamError,
     StreamHandshakeError,
 )
+from .models import FINAL_STATES
 
 __all__ = ["AsyncStream", "Stream"]
 
@@ -55,9 +57,84 @@ class _End:
 class Sink(Protocol):
     """Where the engine puts events for the caller."""
 
-    def put(self, item: Event | _End) -> bool:
-        """Queue an item. False if the queue was full: it has been emptied."""
+    def put(self, item: Event | _End) -> list[Event]:
+        """Queue an item. If the queue was full it is emptied, and everything in it, with this
+        item, is returned: the events the caller will never get."""
         ...
+
+
+class Settled:
+    """Recorded requests the stream has seen settle, and the wait() calls watching for them.
+    Shared with the caller's thread, hence the lock."""
+
+    REMEMBERED = 1000
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.finals: OrderedDict[str, Event] = OrderedDict()
+        self.watchers: dict[str, set[Watcher]] = {}
+
+    def saw(self, body: Event) -> None:
+        request_id = body.get("request")
+        if not isinstance(request_id, str):
+            return
+        with self.lock:
+            if body.get("state") in FINAL_STATES:
+                self.finals[request_id] = body
+                self.finals.move_to_end(request_id)
+                while len(self.finals) > self.REMEMBERED:
+                    self.finals.popitem(last=False)
+            watchers = list(self.watchers.get(request_id, ()))
+        for watcher in watchers:
+            watcher(body)
+
+    def final(self, request_id: str) -> Event | None:
+        with self.lock:
+            return self.finals.get(request_id)
+
+    def watch(self, request_id: str, watcher: Watcher) -> bool:
+        """Add a watcher. True if it is the first for this id."""
+        with self.lock:
+            watchers = self.watchers.setdefault(request_id, set())
+            first = not watchers
+            watchers.add(watcher)
+            return first
+
+    def unwatch(self, request_id: str, watcher: Watcher) -> bool:
+        """Remove a watcher. True if it was the last for this id."""
+        with self.lock:
+            watchers = self.watchers.get(request_id, set())
+            watchers.discard(watcher)
+            if watchers:
+                return False
+            self.watchers.pop(request_id, None)
+            return True
+
+
+if TYPE_CHECKING:
+    _LoggerAdapter = logging.LoggerAdapter[logging.Logger]
+else:  # not subscriptable at run time before Python 3.11
+    _LoggerAdapter = logging.LoggerAdapter
+
+
+class _Redacted(_LoggerAdapter):
+    """websockets' logger, with the API key taken out of everything it logs (it logs the
+    upgrade's headers at debug level)."""
+
+    def __init__(self, logger: logging.Logger, secret: str) -> None:
+        super().__init__(logger, {})
+        self.secret = secret
+
+    def log(self, level: int, msg: object, *args: object, **kwargs: Any) -> None:
+        if self.isEnabledFor(level):
+            msg = self.redact(msg)
+            args = tuple(self.redact(arg) for arg in args)
+            super().log(level, msg, *args, **kwargs)
+
+    def redact(self, value: object) -> object:
+        if isinstance(value, (str, bytes)) and self.secret in str(value):
+            return str(value).replace(self.secret, "[api key]")
+        return value
 
 
 class Engine:
@@ -71,20 +148,23 @@ class Engine:
         machine: core.StreamMachine,
         reader: Reader,
         sink: Sink,
-        watchers: dict[str, set[Watcher]],
+        settled: Settled,
     ) -> None:
         self.url = url
         self.api_key = api_key
         self.machine = machine
         self.reader = reader
         self.sink = sink
-        self.watchers = watchers
+        self.settled = settled
         self.inputs: asyncio.Queue[core.Input] = asyncio.Queue()
         self.socket: ClientConnection | None = None
         self.socket_generation = 0
         self.tasks: set[asyncio.Task[Any]] = set()
-        self.timers: list[asyncio.TimerHandle] = []
+        # One handle per timer name: starting a timer replaces (cancels) the one before.
+        self.timers: dict[str, asyncio.TimerHandle] = {}
+        self.dropped: list[Event] | None = None
         self.finished = False
+        self.logger = _Redacted(logging.getLogger("websockets.client"), api_key)
 
     def feed(self, event: core.Input) -> None:
         self.inputs.put_nowait(event)
@@ -94,8 +174,13 @@ class Engine:
         try:
             while not self.finished:
                 event = await self.inputs.get()
+                self.dropped = None
                 for action in self.machine.handle(event):
                     await self.do(action)
+                if self.dropped is not None:
+                    # The queue overflowed: the rest of this batch is dropped with it, so no
+                    # event reaches the caller ahead of the resync that replaces them.
+                    self.feed(core.Overflowed(tuple(self.dropped)))
                 if isinstance(event, core.Close):
                     self.finish(None)
         finally:
@@ -107,7 +192,7 @@ class Engine:
             self.sink.put(_End(error))
 
     async def shut(self) -> None:
-        for handle in self.timers:
+        for handle in self.timers.values():
             handle.cancel()
         for task in list(self.tasks):
             task.cancel()
@@ -130,18 +215,22 @@ class Engine:
                     with contextlib.suppress(ConnectionClosed):
                         await self.socket.send(text)
             case core.StartTimer(name=name, seconds=seconds, generation=generation):
-                loop = asyncio.get_running_loop()
+                previous = self.timers.get(name)
+                if previous is not None:
+                    previous.cancel()
                 timer = core.Timer(name, generation)
-                self.timers.append(loop.call_later(seconds, self.feed, timer))
-                self.timers = [handle for handle in self.timers if not handle.cancelled()]
+                self.timers[name] = asyncio.get_running_loop().call_later(seconds, self.feed, timer)
             case core.Read():
                 self.spawn(self.read(action))
             case core.Emit(event=event):
-                if not self.sink.put(event):
-                    self.feed(core.Overflowed())
+                if self.dropped is not None:
+                    self.dropped.append(event)
+                else:
+                    dropped = self.sink.put(event)
+                    if dropped:
+                        self.dropped = dropped
             case core.Notify(body=body):
-                for watcher in list(self.watchers.get(str(body.get("request")), ())):
-                    watcher(body)
+                self.settled.saw(body)
             case core.Fail(error=error):
                 self.finish(error)
 
@@ -153,6 +242,7 @@ class Engine:
                 user_agent_header=USER_AGENT,
                 ping_interval=None,
                 open_timeout=OPEN_TIMEOUT,
+                logger=self.logger,
             )
         except InvalidStatus as refused:
             status = refused.response.status_code
@@ -291,14 +381,14 @@ class _AsyncSink:
         self.limit = limit
         self.ready = asyncio.Event()
 
-    def put(self, item: Event | _End) -> bool:
-        full = not isinstance(item, _End) and len(self.items) >= self.limit
-        if full:
+    def put(self, item: Event | _End) -> list[Event]:
+        if not isinstance(item, _End) and len(self.items) >= self.limit:
+            dropped = [event for event in self.items if not isinstance(event, _End)] + [item]
             self.items.clear()
-        else:
-            self.items.append(item)
+            return dropped
+        self.items.append(item)
         self.ready.set()
-        return not full
+        return []
 
     async def get(self) -> Event | _End:
         while not self.items:
@@ -321,14 +411,14 @@ class AsyncStream:
         streams: list[Any],
     ) -> None:
         self._sink = _AsyncSink(machine.queue_limit)
-        self._watchers: dict[str, set[Watcher]] = {}
+        self._settled = Settled()
         self._engine = Engine(
             url=url,
             api_key=options.api_key,
             machine=machine,
             reader=reader,
             sink=self._sink,
-            watchers=self._watchers,
+            settled=self._settled,
         )
         self._streams = streams
         self._task: asyncio.Task[None] | None = None
@@ -381,19 +471,8 @@ class AsyncStream:
         with contextlib.suppress(asyncio.CancelledError):
             await self._task
 
-    def watch(self, request_id: str, watcher: Watcher) -> Callable[[], None]:
-        """Call `watcher` with each recorded-request body seen for this id. Returns the undo."""
-        self._watchers.setdefault(request_id, set()).add(watcher)
-        self._engine.feed(core.Watch(request_id))
-
-        def unwatch() -> None:
-            watchers = self._watchers.get(request_id, set())
-            watchers.discard(watcher)
-            if not watchers:
-                self._watchers.pop(request_id, None)
-                self._engine.feed(core.Unwatch(request_id))
-
-        return unwatch
+    def _feed(self, event: core.Input) -> None:
+        self._engine.feed(event)
 
 
 # The sync shell.
@@ -405,15 +484,15 @@ class _ThreadSink:
         self.limit = limit
         self.ready = threading.Condition()
 
-    def put(self, item: Event | _End) -> bool:
+    def put(self, item: Event | _End) -> list[Event]:
         with self.ready:
-            full = not isinstance(item, _End) and len(self.items) >= self.limit
-            if full:
+            if not isinstance(item, _End) and len(self.items) >= self.limit:
+                dropped = [event for event in self.items if not isinstance(event, _End)] + [item]
                 self.items.clear()
-            else:
-                self.items.append(item)
+                return dropped
+            self.items.append(item)
             self.ready.notify_all()
-            return not full
+            return []
 
     def get(self) -> Event | _End:
         with self.ready:
@@ -436,8 +515,7 @@ class Stream:
         streams: list[Any],
     ) -> None:
         self._sink = _ThreadSink(machine.queue_limit)
-        self._watchers: dict[str, set[Watcher]] = {}
-        self._lock = threading.Lock()
+        self._settled = Settled()
         self._url = url
         self._options = options
         self._machine = machine
@@ -478,7 +556,7 @@ class Stream:
                 machine=self._machine,
                 reader=read,
                 sink=self._sink,
-                watchers=self._watchers,
+                settled=self._settled,
             )
             started.set()
             await self._engine.run()
@@ -524,21 +602,34 @@ class Stream:
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join()
 
-    def watch(self, request_id: str, watcher: Watcher) -> Callable[[], None]:
-        """Call `watcher` (on the stream's thread) with each recorded-request body seen for this
-        id. Returns the undo."""
-        with self._lock:
-            self._watchers.setdefault(request_id, set()).add(watcher)
-        self._feed(core.Watch(request_id))
 
-        def unwatch() -> None:
-            with self._lock:
-                watchers = self._watchers.get(request_id, set())
-                watchers.discard(watcher)
-                gone = not watchers
-                if gone:
-                    self._watchers.pop(request_id, None)
-            if gone:
-                self._feed(core.Unwatch(request_id))
+# What requests.wait() and the trade calls use from the streams open on their account handle.
 
-        return unwatch
+
+def watch(stream: Stream | AsyncStream, request_id: str, watcher: Watcher) -> Callable[[], None]:
+    """Call `watcher` with each recorded-request body the stream sees for this id (on the
+    stream's thread, for a sync stream), and look the id up on every resync. Returns the undo."""
+    if stream._settled.watch(request_id, watcher):  # pyright: ignore[reportPrivateUsage]
+        stream._feed(core.Watch(request_id))  # pyright: ignore[reportPrivateUsage]
+
+    def unwatch() -> None:
+        if stream._settled.unwatch(request_id, watcher):  # pyright: ignore[reportPrivateUsage]
+            stream._feed(core.Unwatch(request_id))  # pyright: ignore[reportPrivateUsage]
+
+    return unwatch
+
+
+def settled(streams: Iterable[Stream | AsyncStream], request_id: str) -> Event | None:
+    """The request in a final state, if an open stream has seen it settle."""
+    for stream in list(streams):
+        body = stream._settled.final(request_id)  # pyright: ignore[reportPrivateUsage]
+        if body is not None:
+            return body
+    return None
+
+
+def report(streams: Iterable[Stream | AsyncStream], error: PipsocketError) -> None:
+    """A read outside the streams failed: a 401 or a gone account stops them too."""
+    if core.fatal(error):
+        for stream in list(streams):
+            stream._feed(core.Fatal(error))  # pyright: ignore[reportPrivateUsage]

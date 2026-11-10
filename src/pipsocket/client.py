@@ -45,7 +45,16 @@ from ._http import (
 )
 from .errors import APITimeoutError, PipsocketError
 from .models import TradeRequest
-from .stream import DEFAULT_QUEUE_SIZE, Stream, new_machine, stream_url, sync_reader
+from .stream import (
+    DEFAULT_QUEUE_SIZE,
+    Stream,
+    new_machine,
+    report,
+    settled,
+    stream_url,
+    sync_reader,
+    watch,
+)
 from .types import (
     AccountView,
     CheckView,
@@ -57,6 +66,7 @@ from .types import (
     OrderTypeParam,
     PendingOrderView,
     PositionView,
+    RequestView,
     SymbolSummaryView,
     SymbolView,
     TickView,
@@ -150,35 +160,39 @@ class _Requester:
         finally:
             run.close()
 
-    def trade(self, spec: Spec, timeout: float | None, max_retries: int | None) -> TradeRequest:
+    def trade(
+        self, spec: Spec, timeout: float | None, max_retries: int | None, streams: list[Stream]
+    ) -> TradeRequest:
         """A trade call. A cancellation or interrupt passes through as it is, with the key
         set on it where it can carry one; nothing is sent after it."""
         try:
-            return cast(TradeRequest, self.call(spec, timeout, max_retries))
+            request = cast(TradeRequest, self.call(spec, timeout, max_retries))
         except PipsocketError:
             raise
         except BaseException as error:
             attach_key(error, spec.idempotency_key)
             raise
+        return newest(request, streams, spec.idempotency_key)
 
     def wait(
         self, spec: Spec, request_id: str, timeout: float, streams: list[Stream]
     ) -> TradeRequest:
+        known = settled(streams, request_id)
+        if known is not None:
+            return TradeRequest(cast(RequestView, known))
         run = drive_wait(check_wait(timeout), self.options.clock)
-        seen = _Seen()
-        undo = [stream.watch(request_id, seen.saw) for stream in list(streams)]
+        seen = _Seen() if streams else None
+        undo = [watch(stream, request_id, seen.saw) for stream in list(streams)] if seen else []
         step = next(run)
         try:
             while True:
                 if isinstance(step, Look):
-                    outcome: TradeRequest | PipsocketError
-                    try:
-                        attempt_timeout = min(self.options.timeout, step.seconds)
-                        outcome = cast(TradeRequest, self.call(spec, attempt_timeout, 0))
-                    except PipsocketError as error:
-                        outcome = error
+                    attempt_timeout = min(self.options.timeout, step.seconds)
+                    outcome = self.look(spec, attempt_timeout, seen)
+                    if isinstance(outcome, PipsocketError):
+                        report(streams, outcome)
                     step = run.send(outcome)
-                elif undo:
+                elif seen is not None:
                     step = run.send(seen.wait(step.seconds))
                 else:
                     self.sleep(step.seconds)
@@ -190,32 +204,14 @@ class _Requester:
             for unwatch in undo:
                 unwatch()
 
-    def look(self, spec: Spec, seconds: float) -> TradeRequest | PipsocketError:
-        """One lookup for wait(), over within `seconds` all told: the HTTP timeout applies to
-        each network operation, so a slow answer could otherwise run past wait()'s deadline.
-        A lookup that runs over is left to finish on its own; it is only a read."""
-        attempt_timeout = min(self.options.timeout, seconds)
-        answers: list[TradeRequest | BaseException] = []
-        done = threading.Event()
+    def look(self, spec: Spec, timeout: float, seen: _Seen | None) -> TradeRequest | PipsocketError:
+        """One lookup for wait(). A settlement an open stream sees meanwhile ends it at once."""
 
-        def lookup() -> None:
-            try:
-                answers.append(cast(TradeRequest, self.call(spec, attempt_timeout, 0)))
-            except BaseException as error:
-                answers.append(error)
-            done.set()
+        def lookup() -> TradeRequest:
+            return cast(TradeRequest, self.call(spec, timeout, 0))
 
         try:
-            if math.isinf(seconds):
-                lookup()
-            else:
-                threading.Thread(target=lookup, daemon=True).start()
-                if not done.wait(seconds):
-                    raise APITimeoutError("The lookup did not answer within wait()'s timeout.")
-            answer = answers[0]
-            if isinstance(answer, BaseException):
-                raise answer
-            return answer
+            return lookup() if seen is None else seen.race(lookup)
         except PipsocketError as error:
             return error
 
@@ -257,21 +253,60 @@ class _Requester:
 
 
 class _Seen:
-    """A request an open stream saw settle, for a wait() between lookups."""
+    """A request an open stream saw settle, for a wait()."""
 
     def __init__(self) -> None:
         self.request: TradeRequest | None = None
-        self.event = threading.Event()
+        self.changed = threading.Condition()
 
     def saw(self, body: Any) -> None:
         request = TradeRequest(body)
         if request.final:
-            self.request = request
-            self.event.set()
+            with self.changed:
+                self.request = request
+                self.changed.notify_all()
 
     def wait(self, seconds: float) -> TradeRequest | None:
-        self.event.wait(seconds)
-        return self.request
+        """Wait up to `seconds`, or until a stream sees the request settle."""
+        with self.changed:
+            self.changed.wait_for(lambda: self.request is not None, seconds)
+            return self.request
+
+    def race(self, lookup: Callable[[], TradeRequest]) -> TradeRequest:
+        """Look the request up, unless a stream sees it settle first. A final state seen on
+        the stream is never replaced by an older, outstanding one from the lookup. (The
+        lookup runs on, as a read, if the stream wins.)"""
+        answers: list[TradeRequest | BaseException] = []
+
+        def run() -> None:
+            answer: TradeRequest | BaseException
+            try:
+                answer = lookup()
+            except BaseException as error:
+                answer = error
+            with self.changed:
+                answers.append(answer)
+                self.changed.notify_all()
+
+        threading.Thread(target=run, daemon=True).start()
+        with self.changed:
+            self.changed.wait_for(lambda: bool(answers) or self.request is not None)
+            if self.request is not None:
+                return self.request
+        answer = answers[0]
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+
+def newest(request: TradeRequest, streams: list[Any], key: str | None) -> TradeRequest:
+    """A trade call's answer, unless an open stream already saw that request settle: a slower
+    202 never moves a request seen as final back to pending."""
+    if request.outstanding:
+        known = settled(streams, request.id)
+        if known is not None:
+            return TradeRequest(cast(RequestView, known), idempotency_key=key)
+    return request
 
 
 class Account:
@@ -281,12 +316,12 @@ class Account:
         self._requester = requester
         self.id = account_id
         self._streams: list[Stream] = []
-        self.positions = Positions(requester, account_id)
-        self.orders = Orders(requester, account_id)
+        self.positions = Positions(requester, account_id, self._streams)
+        self.orders = Orders(requester, account_id, self._streams)
         self.requests = Requests(requester, account_id, self._streams)
-        self.history = History(requester, account_id)
-        self.symbols = Symbols(requester, account_id)
-        self.kill_switch = KillSwitch(requester, account_id)
+        self.history = History(requester, account_id, self._streams)
+        self.symbols = Symbols(requester, account_id, self._streams)
+        self.kill_switch = KillSwitch(requester, account_id, self._streams)
 
     def get(self, *, timeout: float | None = None, max_retries: int | None = None) -> AccountView:
         """The account: its terminal's status, and figures from the terminal's last report."""
@@ -322,9 +357,10 @@ class Account:
 
 
 class _Resource:
-    def __init__(self, requester: _Requester, account_id: str) -> None:
+    def __init__(self, requester: _Requester, account_id: str, streams: list[Stream]) -> None:
         self._requester = requester
         self._account = account_id
+        self._streams = streams
 
 
 class Positions(_Resource):
@@ -349,7 +385,7 @@ class Positions(_Resource):
         path = f"/positions/{ticket_segment(ticket)}"
         body = {"sl": sl, "tp": tp}
         spec = trade("set_position_levels", "PATCH", self._account, path, body, idempotency_key)
-        return self._requester.trade(spec, timeout, max_retries)
+        return self._requester.trade(spec, timeout, max_retries, self._streams)
 
     def close(
         self,
@@ -376,7 +412,7 @@ class Positions(_Resource):
             "comment": comment,
         }
         spec = trade("close_position", "POST", self._account, path, body, idempotency_key)
-        return self._requester.trade(spec, timeout, max_retries)
+        return self._requester.trade(spec, timeout, max_retries, self._streams)
 
     def close_by(
         self,
@@ -391,7 +427,7 @@ class Positions(_Resource):
         path = f"/positions/{ticket_segment(ticket)}/close-by"
         body = {"position_by": position_by}
         spec = trade("close_by", "POST", self._account, path, body, idempotency_key)
-        return self._requester.trade(spec, timeout, max_retries)
+        return self._requester.trade(spec, timeout, max_retries, self._streams)
 
 
 class Orders(_Resource):
@@ -429,7 +465,7 @@ class Orders(_Resource):
         """
         body = order_fields(locals())
         spec = trade("place_order", "POST", self._account, "/orders", body, idempotency_key)
-        return self._requester.trade(spec, timeout, max_retries)
+        return self._requester.trade(spec, timeout, max_retries, self._streams)
 
     def check(
         self,
@@ -480,7 +516,7 @@ class Orders(_Resource):
             "expiration": expiration,
         }
         spec = trade("modify_order", "PATCH", self._account, path, body, idempotency_key)
-        return self._requester.trade(spec, timeout, max_retries)
+        return self._requester.trade(spec, timeout, max_retries, self._streams)
 
     def cancel(
         self,
@@ -493,14 +529,10 @@ class Orders(_Resource):
         """Cancel a pending order."""
         path = f"/orders/{ticket_segment(ticket)}"
         spec = trade("cancel_order", "DELETE", self._account, path, None, idempotency_key)
-        return self._requester.trade(spec, timeout, max_retries)
+        return self._requester.trade(spec, timeout, max_retries, self._streams)
 
 
 class Requests(_Resource):
-    def __init__(self, requester: _Requester, account_id: str, streams: list[Stream]) -> None:
-        super().__init__(requester, account_id)
-        self._streams = streams
-
     def get(
         self, request_id: str, *, timeout: float | None = None, max_retries: int | None = None
     ) -> TradeRequest:

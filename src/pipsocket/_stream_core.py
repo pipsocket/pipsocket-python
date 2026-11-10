@@ -138,7 +138,18 @@ class SetTicks:
 
 @dataclass(frozen=True)
 class Overflowed:
-    """The caller fell behind and the shell's queue of events filled up: it was emptied."""
+    """The caller fell behind and the shell's queue of events filled up: it was emptied.
+    `dropped` are the events that never reached the caller, oldest first."""
+
+    dropped: tuple[Json, ...] = ()
+
+
+@dataclass(frozen=True)
+class Fatal:
+    """A read made outside the machine (a wait() lookup) failed. A 401 or 404 for the
+    account stops the stream too: it can no longer resync."""
+
+    error: PipsocketError
 
 
 @dataclass(frozen=True)
@@ -168,6 +179,7 @@ Input = (
     | Answered
     | SetTicks
     | Overflowed
+    | Fatal
     | Watch
     | Unwatch
     | Close
@@ -217,7 +229,8 @@ class Emit:
 
 @dataclass(frozen=True)
 class Notify:
-    """A recorded request a wait() may be watching, from an event or a lookup."""
+    """A recorded request seen on the stream or in a resync lookup, for wait() and for
+    trade calls to reconcile a slower REST answer with."""
 
     body: Json
 
@@ -237,8 +250,9 @@ Action = Connect | Disconnect | Send | StartTimer | Read | Emit | Notify | Fail
 class Resync:
     reason: Reason
     generation: int
-    send_ticks: bool
-    ticks_call: str | None = None
+    # A new socket: wait for its tick set to be acknowledged before reading.
+    needs_ticks: bool
+    waiting_ticks: bool = False
     account: Json | None = None
     positions: list[Json] | None = None
     orders: list[Json] | None = None
@@ -252,6 +266,8 @@ class Resync:
     ranges: deque[tuple[str, int, int]] = field(default_factory=deque[tuple[str, int, int]])
     lookups: set[str] = field(default_factory=set[str])
     waiting: Read | None = None
+    # A different login or server than the checkpoint's: committed when the resync finishes.
+    new_identity: tuple[Any, Any] | None = None
 
 
 @dataclass
@@ -289,12 +305,18 @@ class StreamMachine:
         self.newest_ticks: dict[str, Json] = {}
         self.terminal_away = False
         self.calls = 0
-        self.ticks_calls: set[str] = set()
-        self.ticks_changed = False
+        # One /ticks call at a time: calls on a stream run side by side, so the set last sent
+        # must be the one the stream keeps.
+        self.ticks_call: str | None = None
+        self.ticks_sending: tuple[str, ...] = ()
+        self.ticks_acknowledged: tuple[str, ...] = ()
         self.generations: dict[str, int] = {}
         self.read_generation = 0
         self.recent_deals: deque[int] = deque(maxlen=REMEMBERED_TICKETS)
         self.recent_orders: deque[int] = deque(maxlen=REMEMBERED_TICKETS)
+        # Account events emitted, with the checkpoint before each: an overflow takes back
+        # the ones the caller never got.
+        self.account_events: deque[tuple[Json, int | None]] = deque(maxlen=4 * queue_limit + 64)
         self.out: list[Action] = []
 
     # The one entry point.
@@ -328,8 +350,12 @@ class StreamMachine:
                 self.answered(event)
             case SetTicks(symbols=symbols):
                 self.set_ticks(symbols)
-            case Overflowed():
+            case Overflowed(dropped=dropped):
+                self.take_back(dropped)
                 self.overflowed()
+            case Fatal(error=error):
+                if fatal(error):
+                    self.fail(error)
             case Watch(request_id=request_id):
                 self.watched.add(request_id)
             case Unwatch(request_id=request_id):
@@ -380,12 +406,16 @@ class StreamMachine:
         self.subscribed = False
         self.stop_timers()
         self.abandon_resync()
-        self.ticks_calls.clear()
-        self.ticks_changed = False
+        self.ticks_call = None
+        self.ticks_acknowledged = ()
         self.state = State.BACKOFF
-        nominal = min(FIRST_BACKOFF * 2**self.failures, LONGEST_BACKOFF)
+        self.start_timer("backoff", self.backoff())
+
+    def backoff(self) -> float:
+        """0.5 s doubling to 30 s, each times a random factor from 0.5 to 1."""
+        nominal = FIRST_BACKOFF * 2 ** min(self.failures, 16)
         self.failures += 1
-        self.start_timer("backoff", nominal * (0.5 + 0.5 * self.random()))
+        return min(nominal, LONGEST_BACKOFF) * (0.5 + 0.5 * self.random())
 
     def close(self) -> None:
         if self.socket_open:
@@ -412,6 +442,8 @@ class StreamMachine:
         elif name in ("pong", "subscribed", "resync_deadline"):
             # The socket is dead, never subscribed, or a resync is stuck: start over.
             self.lost()
+        elif name == "ticks_retry":
+            self.send_ticks_if_due()
         elif name == "resync_retry" and self.state is State.SYNCING:
             self.begin_resync_reads()
         elif name == "probe" and self.state is State.HOST_AWAY:
@@ -431,11 +463,11 @@ class StreamMachine:
                 self.connected_before = True
                 self.begin_resync(reason, send_ticks=True)
             return
-        if kind in ("response", "error") and body.get("id") in self.ticks_calls:
+        if kind in ("response", "error") and body.get("id") == self.ticks_call:
             self.ticks_answered(body)
             return
         if kind == "request":
-            self.notify(body)
+            self.out.append(Notify(body))
         if self.state is State.SYNCING:
             self.during_resync(body)
         elif self.state is State.LIVE:
@@ -502,6 +534,19 @@ class StreamMachine:
         self.newest_ticks.clear()
         self.begin_resync("overflow", send_ticks=False)
 
+    def take_back(self, dropped: tuple[Json, ...]) -> None:
+        """Events the caller never got don't count as delivered: the checkpoint goes back to
+        before the first dropped account event, and dropped deals aren't remembered."""
+        for body in dropped:
+            if body.get("type") == "deal":
+                ticket = deal_ticket(body)
+                if ticket is not None and ticket in self.recent_deals:
+                    self.recent_deals.remove(ticket)
+        dropped_ids = {id(body) for body in dropped if body.get("type") == "account"}
+        while self.account_events and id(self.account_events[-1][0]) in dropped_ids:
+            _, before = self.account_events.pop()
+            self.checkpoint.server_time = before
+
     # Delivering.
 
     def deliver(self, body: Json) -> None:
@@ -509,7 +554,9 @@ class StreamMachine:
         if kind == "account":
             server_time = body.get("server_time")
             if isinstance(server_time, int) and not isinstance(server_time, bool):
-                self.checkpoint.server_time = max(self.checkpoint.server_time or 0, server_time)
+                before = self.checkpoint.server_time
+                self.account_events.append((body, before))
+                self.checkpoint.server_time = max(before or 0, server_time)
         elif kind == "deal":
             ticket = deal_ticket(body)
             if ticket is not None:
@@ -519,56 +566,53 @@ class StreamMachine:
     def emit(self, body: Json) -> None:
         self.out.append(Emit(body))
 
-    def notify(self, body: Json) -> None:
-        request_id = body.get("request")
-        if isinstance(request_id, str) and request_id in self.watched:
-            self.out.append(Notify(body))
-
     # Ticks.
 
     def set_ticks(self, symbols: tuple[str, ...]) -> None:
-        """Remember the set, and send it now if the socket is subscribed. Calls on the stream
-        run side by side, so while one is unanswered the next waits for it: the last set sent
-        is the one that holds."""
+        """Remember the set, and send it once the socket is subscribed and no other /ticks
+        call is unanswered."""
         self.ticks = symbols
-        if not self.subscribed:
-            return
-        if self.ticks_calls:
-            self.ticks_changed = True
-        else:
-            self.send_ticks()
+        self.send_ticks_if_due()
 
-    def send_ticks(self) -> str:
+    def send_ticks_if_due(self) -> None:
+        if not self.subscribed or self.ticks_call is not None:
+            return
+        if self.ticks == self.ticks_acknowledged:
+            return
         self.calls += 1
-        call_id = f"ticks-{self.calls}"
-        self.ticks_calls.add(call_id)
+        self.ticks_call = f"ticks-{self.calls}"
+        self.ticks_sending = self.ticks
         body = {
-            "id": call_id,
+            "id": self.ticks_call,
             "method": "PUT",
             "path": "/ticks",
             "body": {"symbols": list(self.ticks)},
         }
         self.out.append(Send(json.dumps(body)))
-        return call_id
+
+    def ticks_settled(self) -> bool:
+        return self.ticks_call is None and self.ticks == self.ticks_acknowledged
 
     def ticks_answered(self, body: Json) -> None:
-        call_id = body["id"]
-        self.ticks_calls.discard(call_id)
-        if self.ticks_changed and not self.ticks_calls:
-            self.ticks_changed = False
-            self.send_ticks()
+        self.ticks_call = None
         status = body.get("status")
         if body.get("type") == "response" and status == 200:
-            if self.resync is not None and self.resync.ticks_call == call_id:
-                self.resync.ticks_call = None
+            self.ticks_acknowledged = self.ticks_sending
+            self.send_ticks_if_due()
+            resync = self.resync
+            if resync is not None and resync.waiting_ticks and self.ticks_settled():
+                resync.waiting_ticks = False
                 self.after_ticks()
             return
         if body.get("type") == "response" and isinstance(status, int) and 400 <= status < 500:
             self.fail(ticks_refused(status, body.get("body")))
             return
-        # Refused by the stream itself (too_many_calls): try the resync again.
-        if self.resync is not None and self.resync.ticks_call == call_id:
+        # Refused by the stream itself (too_many_calls): try the resync again, or send the
+        # set again later.
+        if self.resync is not None and self.resync.waiting_ticks:
             self.resync_failed()
+        else:
+            self.start_timer("ticks_retry", self.backoff())
 
     # Resync.
 
@@ -578,7 +622,7 @@ class StreamMachine:
             # A gap during a resync: start again, so the snapshot is read after it. A new
             # socket's resync keeps its reason, and its ticks if they aren't set yet. The 120 s
             # deadline still counts from the first start, so gaps can't keep it syncing.
-            send_ticks = send_ticks or self.resync.send_ticks or self.resync.ticks_call is not None
+            send_ticks = send_ticks or self.resync.needs_ticks
             if self.resync.reason in ("connected", "reconnected"):
                 reason = self.resync.reason
             self.bump("resync_retry")
@@ -587,7 +631,7 @@ class StreamMachine:
             self.start_timer("resync_deadline", RESYNC_WITHIN)
         self.state = State.SYNCING
         self.read_generation += 1
-        self.resync = Resync(reason, self.read_generation, send_ticks and bool(self.ticks))
+        self.resync = Resync(reason, self.read_generation, send_ticks)
         self.begin_resync_reads()
 
     def abandon_resync(self) -> None:
@@ -601,15 +645,17 @@ class StreamMachine:
         assert resync is not None
         self.read_generation += 1
         resync.generation = self.read_generation
-        if resync.send_ticks:
-            resync.ticks_call = self.send_ticks()
-            return
+        if resync.needs_ticks:
+            self.send_ticks_if_due()
+            if not self.ticks_settled():
+                resync.waiting_ticks = True
+                return
         self.after_ticks()
 
     def after_ticks(self) -> None:
         resync = self.resync
         assert resync is not None
-        resync.send_ticks = False
+        resync.needs_ticks = False
         if self.read_state:
             self.read(resync, Read("account", resync.generation))
         else:
@@ -665,7 +711,7 @@ class StreamMachine:
         elif read.kind == "request":
             resync.lookups.discard(read.request_id or "")
             if isinstance(value, dict):
-                self.notify(value)  # pyright: ignore[reportUnknownArgumentType]
+                self.out.append(Notify(cast(Json, value)))
             self.next_lookup(resync)
 
     def next_after_snapshot(self, resync: Resync) -> None:
@@ -685,7 +731,7 @@ class StreamMachine:
             checkpoint.login,
             checkpoint.server,
         ):
-            self.checkpoint = Checkpoint(None, login, server)
+            resync.new_identity = (login, server)
             self.history_unavailable(resync, "account_changed")
             return
         if checkpoint.server_time is None:
@@ -749,18 +795,22 @@ class StreamMachine:
         resync = self.resync
         assert resync is not None
         resync.waiting = None
-        nominal = min(FIRST_BACKOFF * 2**self.failures, LONGEST_BACKOFF)
-        self.failures += 1
-        self.start_timer("resync_retry", nominal * (0.5 + 0.5 * self.random()))
+        self.start_timer("resync_retry", self.backoff())
         # Start the next attempt from a clean slate; held events are kept.
-        fresh = Resync(resync.reason, resync.generation, resync.send_ticks)
-        self.resync = fresh
+        self.resync = Resync(resync.reason, resync.generation, resync.needs_ticks)
 
     def finish_resync(self) -> None:
         resync = self.resync
         assert resync is not None
         self.bump("resync_deadline")
         self.failures = 0
+        if resync.new_identity is not None:
+            # A different login: its own checkpoint, and nothing remembered from the old one.
+            login, server = resync.new_identity
+            self.checkpoint = Checkpoint(None, login, server)
+            self.recent_deals.clear()
+            self.recent_orders.clear()
+            self.account_events.clear()
         history: Json | None = None
         if self.read_state and resync.history_reason is None and resync.history_from is not None:
             deals = self.fresh(resync.deals, self.recent_deals, deal_ticket)
@@ -789,11 +839,14 @@ class StreamMachine:
         self.resync = None
         self.state = State.LIVE
         self.emit(event)
-        held, self.held = self.held, []
-        ticks, self.newest_ticks = list(self.newest_ticks.values()), {}
-        for body in held + ticks:
+        waiting = self.held + list(self.newest_ticks.values())
+        self.held, self.newest_ticks = [], {}
+        for index, body in enumerate(waiting):
             self.while_live(body)
             if self.state is not State.LIVE:
+                # That event started another resync (or the host went): the rest wait for it.
+                for rest in waiting[index + 1 :]:
+                    self.hold(rest)
                 return
 
     def fresh(

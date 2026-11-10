@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -19,6 +20,11 @@ from pipsocket import (
     StreamHandshakeError,
     TradeRequest,
     _stream_core,
+)
+from pipsocket.stream import (  # pyright: ignore[reportPrivateUsage]
+    Engine,
+    Settled,
+    _AsyncSink,
 )
 
 from .fake_stream import FakeStreamServer
@@ -217,3 +223,158 @@ def test_close_ends_the_iteration(server: FakeStreamServer) -> None:
         next(events)
     with pytest.raises(StopIteration):
         next(events)
+
+
+# Edges found in review
+
+
+def test_the_api_key_is_never_logged(
+    server: FakeStreamServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    acct = sync_client(server).account(ACCOUNT)
+
+    with caplog.at_level(logging.DEBUG, logger="websockets.client"), acct.stream() as events:
+        next(events)
+
+    client = "\n".join(r.getMessage() for r in caplog.records if r.name == "websockets.client")
+    assert "Authorization" in client, "the upgrade's headers were logged"
+    assert API_KEY not in client
+
+
+def test_an_overflowing_batch_drops_its_tail_too() -> None:
+    async def run() -> tuple[list[Any], list[Any]]:
+        sink = _AsyncSink(2)
+        engine = engine_with(sink)
+        events = [{"type": "deal", "deal": {"ticket": n}} for n in range(5)]
+        engine.dropped = None
+        for event in events:
+            await engine.do(_stream_core.Emit(event))
+        return list(sink.items), engine.dropped or []
+
+    queued, dropped = asyncio.run(run())
+    assert queued == []
+    assert [d["deal"]["ticket"] for d in dropped] == [0, 1, 2, 3, 4]
+
+
+async def never_read(read: _stream_core.Read) -> Any:
+    raise AssertionError("no read expected")
+
+
+def engine_with(sink: _AsyncSink) -> Engine:
+    machine = _stream_core.StreamMachine(random=lambda: 1.0)
+    return Engine(
+        url="ws://unused", api_key=API_KEY, machine=machine, reader=never_read,
+        sink=sink, settled=Settled(),
+    )  # fmt: skip
+
+
+def test_a_timer_replaces_the_one_before_it() -> None:
+    async def run() -> int:
+        engine = engine_with(_AsyncSink(10))
+        for generation in range(100):
+            await engine.do(_stream_core.StartTimer("ping", 0.0, generation))
+        await asyncio.sleep(0.01)
+        handles = list(engine.timers.values())
+        await engine.shut()
+        return len(handles)
+
+    assert asyncio.run(run()) == 1
+
+
+def slow_lookup_api(delay: float) -> Callable[[httpx.Request], Any]:
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if "/requests/" in request.url.path:
+            await asyncio.sleep(delay)
+        return rest_api()(request)
+
+    return handle
+
+
+def test_a_stream_settlement_beats_a_slow_lookup_async(server: FakeStreamServer) -> None:
+    async def run() -> tuple[str, float]:
+        http = httpx.AsyncClient(transport=httpx.MockTransport(slow_lookup_api(0.5)))
+        ps = AsyncPipsocket(API_KEY, stream_url=server.url, http_client=http)
+        acct = ps.account(ACCOUNT)
+        async with ps, acct.stream() as events:
+            await anext(events)
+            loop = asyncio.get_running_loop()
+            loop.call_later(
+                0.05, server.send, {**pending(), "state": "completed", "type": "request"}
+            )
+            started = time.monotonic()
+            request = await acct.requests.wait(REQUEST_ID, timeout=0.1)
+            return request.state, time.monotonic() - started
+
+    state, took = asyncio.run(run())
+    assert state == "completed"
+    assert took < 0.4
+
+
+def test_a_stream_settlement_beats_a_slow_lookup_sync(server: FakeStreamServer) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if "/requests/" in request.url.path:
+            time.sleep(0.5)
+        return rest_api()(request)
+
+    http = httpx.Client(transport=httpx.MockTransport(handle))
+    acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
+    with acct.stream() as events:
+        next(events)
+        threading.Timer(
+            0.05, server.send, [{**pending(), "state": "completed", "type": "request"}]
+        ).start()
+        started = time.monotonic()
+        request = acct.requests.wait(REQUEST_ID, timeout=0.1)
+
+    assert request.state == "completed"
+    assert time.monotonic() - started < 0.4
+
+
+def test_an_event_before_the_rest_answer_wins(server: FakeStreamServer) -> None:
+    """Row 13: the stream's settlement arrives before the trade's slower 202 pending."""
+    settled_event = {**pending(), "state": "completed", "type": "request"}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            server.send(settled_event)
+            time.sleep(0.3)
+            return httpx.Response(202, json=pending())
+        return rest_api()(request)
+
+    http = httpx.Client(transport=httpx.MockTransport(handle))
+    acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
+    with acct.stream() as events:
+        next(events)
+        order = acct.orders.place(symbol="EURUSD", type="buy", volume=0.1, type_filling="ioc")
+        waited = acct.requests.wait(REQUEST_ID, timeout=0.1)
+
+    assert order.state == "completed"
+    assert order.idempotency_key is not None
+    assert waited.state == "completed"
+
+
+def test_a_401_on_a_wait_lookup_stops_the_stream(server: FakeStreamServer) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if "/requests/" in request.url.path:
+            return httpx.Response(401, json={"error": "invalid_api_key", "message": "Rolled."})
+        return rest_api()(request)
+
+    http = httpx.Client(transport=httpx.MockTransport(handle))
+    acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
+    with acct.stream() as events:
+        next(events)
+        with pytest.raises(AuthenticationError):
+            acct.requests.wait(REQUEST_ID, timeout=1)
+        with pytest.raises(AuthenticationError):
+            next(events)
+
+
+def test_an_async_wait_with_a_stream_open_times_out_cleanly(server: FakeStreamServer) -> None:
+    async def run() -> str:
+        ps = async_client(server)
+        acct = ps.account(ACCOUNT)
+        async with ps, acct.stream() as events:
+            await anext(events)
+            return (await acct.requests.wait(REQUEST_ID, timeout=0.6)).state
+
+    assert asyncio.run(run()) == "pending"

@@ -38,7 +38,12 @@ from pipsocket import (
 )
 from pipsocket.errors import RangeTooLarge, Unavailable
 
-ACCOUNT = {"id": "acc_1", "login": 5001, "server": "Demo-Server", "status": "connected"}
+ACCOUNT = {
+    "id": "acc_01m6tx3k9f2qw8r7bznd5yvh4c",
+    "login": 5001,
+    "server": "Demo-Server",
+    "status": "connected",
+}
 POSITIONS = [{"ticket": 1, "symbol": "EURUSD"}]
 ORDERS = [{"ticket": 2, "symbol": "EURUSD"}]
 
@@ -89,7 +94,7 @@ class Driver:
     def subscribe(self) -> list[core.Action]:
         self.feed(core.Start())
         self.feed(core.Opened())
-        return self.message(type="subscribed", account="acc_1")
+        return self.message(type="subscribed", account="acc_01m6tx3k9f2qw8r7bznd5yvh4c")
 
     def ticks_call(self, actions: list[core.Action]) -> str:
         (send,) = [a for a in actions if isinstance(a, core.Send) and a.text != "ping"]
@@ -145,7 +150,7 @@ def test_first_connect() -> None:
     driver = Driver()
     assert kinds(driver.feed(core.Start())) == ["Connect"]
     driver.feed(core.Opened())
-    actions = driver.message(type="subscribed", account="acc_1")
+    actions = driver.message(type="subscribed", account="acc_01m6tx3k9f2qw8r7bznd5yvh4c")
     assert driver.state is core.State.SYNCING
     assert not any(isinstance(a, core.Read) for a in actions), "the ticks are set first"
 
@@ -245,7 +250,7 @@ def test_a_closed_socket_reconnects_and_resyncs() -> None:
     assert driver.state is core.State.BACKOFF
     driver.fire("backoff")
     driver.feed(core.Opened())
-    actions = driver.message(type="subscribed", account="acc_1")
+    actions = driver.message(type="subscribed", account="acc_01m6tx3k9f2qw8r7bznd5yvh4c")
     assert driver.ticks_call(actions), "the tick set is sent again on the new socket"
     actions = driver.answer_ticks(actions)
     account = {**ACCOUNT, "server_time": 1_794_067_900}
@@ -508,7 +513,9 @@ def history_after_reconnect(
     driver.feed(core.Closed())
     driver.fire("backoff")
     driver.feed(core.Opened())
-    actions = driver.answer_ticks(driver.message(type="subscribed", account="acc_1"))
+    actions = driver.answer_ticks(
+        driver.message(type="subscribed", account="acc_01m6tx3k9f2qw8r7bznd5yvh4c")
+    )
     return driver.resync(driver.snapshot(actions, account, **reads))
 
 
@@ -540,7 +547,9 @@ def test_a_range_too_large_is_split_down_to_a_minute() -> None:
     driver.feed(core.Closed())
     driver.fire("backoff")
     driver.feed(core.Opened())
-    actions = driver.answer_ticks(driver.message(type="subscribed", account="acc_1"))
+    actions = driver.answer_ticks(
+        driver.message(type="subscribed", account="acc_01m6tx3k9f2qw8r7bznd5yvh4c")
+    )
     actions = driver.answer(driver.answer(driver.answer(actions, ACCOUNT), []), [])
 
     too_large = RangeTooLarge("Too much.", status=422, code="range_too_large", body=None, raw=b"")
@@ -702,3 +711,134 @@ def test_gaps_during_a_resync_dont_extend_its_deadline() -> None:
     assert driver.timers["resync_deadline"] == deadline
     driver.feed(core.Timer("resync_deadline", deadline.generation))
     assert driver.state is core.State.BACKOFF
+
+
+# Overflow, flushing, identity, ticks and backoff edges
+
+
+def test_an_overflow_takes_back_what_the_caller_never_got() -> None:
+    driver = Driver()
+    driver.connect_live()
+    first = {"type": "account", "server_time": 1000}
+    deal = {"type": "deal", "deal": {"ticket": 71}}
+    second = {"type": "account", "server_time": 2000}
+    for body in (first, deal, second):
+        driver.message(**body)
+    sent = driver.emitted(driver.actions)
+    first, deal, second = sent[-3], sent[-2], sent[-1]
+
+    driver.feed(core.Overflowed((deal, second)))
+
+    assert driver.machine.checkpoint.server_time == 1000
+    assert 71 not in driver.machine.recent_deals
+
+
+def test_events_held_behind_one_that_starts_another_resync_are_kept() -> None:
+    driver = Driver()
+    actions = driver.answer_ticks(driver.subscribe())
+    status = {"type": "status", "status": "connected", "detail": None}
+    transaction = {"type": "transaction", "transaction": "deal_add"}
+    driver.message(**status)
+    driver.message(**transaction)
+
+    actions = driver.answer(actions, ACCOUNT)
+    actions = driver.answer(actions, error=not_connected())  # the snapshot has no terminal
+    assert driver.resync(actions)["positions"] is None
+    assert driver.emitted(actions)[1:] == [status], "the status starts another resync"
+    assert driver.state is core.State.SYNCING
+
+    emitted = driver.emitted(driver.snapshot(actions))
+    assert emitted[1:] == [transaction], "the event behind it waited for the new resync"
+
+
+def test_a_new_login_is_committed_only_when_its_resync_finishes() -> None:
+    driver = Driver()
+    driver.connect_live()
+    driver.message(type="account", server_time=1000)
+    driver.message(type="deal", deal={"ticket": 71})
+    driver.feed(core.Closed())
+    driver.fire("backoff")
+    driver.feed(core.Opened())
+    actions = driver.answer_ticks(
+        driver.message(type="subscribed", account="acc_01m6tx3k9f2qw8r7bznd5yvh4c")
+    )
+    other = {**ACCOUNT, "login": 6002}
+    driver.feed(core.Watch("req_9"))  # a lookup keeps the resync from finishing at once
+    actions = driver.answer(driver.answer(driver.answer(actions, other), POSITIONS), ORDERS)
+    assert driver.pending_read(actions).kind == "request"
+    driver.feed(core.Closed())  # interrupted before it finished
+    driver.feed(core.Unwatch("req_9"))
+
+    event = history_after_reconnect_from_backoff(driver, other)
+    assert event["history_reason"] == "account_changed"
+
+    driver.message(type="account", server_time=5000)
+    event = history_after_reconnect(driver, other, deals=[{"ticket": 71}])
+    assert event["history"]["deals"] == [{"ticket": 71}], "the old login's tickets are forgotten"
+
+
+def history_after_reconnect_from_backoff(driver: Driver, account: dict[str, Any]) -> dict[str, Any]:
+    driver.fire("backoff")
+    driver.feed(core.Opened())
+    actions = driver.answer_ticks(
+        driver.message(type="subscribed", account="acc_01m6tx3k9f2qw8r7bznd5yvh4c")
+    )
+    return driver.resync(driver.snapshot(actions, account))
+
+
+def test_a_gap_during_the_first_resync_doesnt_send_a_second_ticks_call() -> None:
+    driver = Driver()
+    actions = driver.subscribe()
+    call = driver.ticks_call(actions)
+
+    actions = driver.message(type="lagged", missed=1)
+
+    assert not any(isinstance(a, core.Send) for a in actions)
+    actions = driver.message(type="response", id=call, status=200, body={"symbols": ["EURUSD"]})
+    assert driver.pending_read(actions).kind == "account"
+
+
+def test_a_resync_waits_for_the_latest_tick_set() -> None:
+    driver = Driver()
+    actions = driver.subscribe()
+    first = driver.ticks_call(actions)
+    driver.feed(core.SetTicks(("XAUUSD",)))
+
+    actions = driver.message(type="response", id=first, status=200, body={"symbols": ["EURUSD"]})
+    second = json.loads(driver_send(actions))
+    assert second["body"] == {"symbols": ["XAUUSD"]}
+    assert not any(isinstance(a, core.Read) for a in actions), "not before the new set is set"
+
+    actions = driver.message(
+        type="response", id=second["id"], status=200, body={"symbols": ["XAUUSD"]}
+    )
+    assert driver.pending_read(actions).kind == "account"
+
+
+def test_backoff_never_overflows() -> None:
+    driver = Driver()
+    driver.feed(core.Start())
+    driver.machine.failures = 5000
+
+    driver.feed(core.Unreachable(OSError("down")))
+
+    assert driver.timers["backoff"].seconds == 30.0
+
+
+def test_a_fatal_failure_reported_from_outside_stops_the_stream() -> None:
+    driver = Driver()
+    driver.connect_live()
+
+    actions = driver.feed(core.Fatal(rolled()))
+
+    assert driver.state is core.State.FAILED
+    assert isinstance(actions[-1], core.Fail)
+
+
+def test_a_missing_request_reported_from_outside_doesnt_stop_it() -> None:
+    driver = Driver()
+    driver.connect_live()
+    gone = NotFound("No such request.", status=404, code="no_such_request", body=None, raw=b"")
+
+    assert driver.feed(core.Fatal(gone)) == []
+    assert driver.state is core.State.LIVE

@@ -76,7 +76,9 @@ class FakeStreamServer:
         assert socket.request is not None
         connection = Connection(socket, dict(socket.request.headers.raw_items()))
         self.connections.append(connection)
-        await socket.send(json.dumps({"type": "subscribed", "account": "acc_1"}))
+        await socket.send(
+            json.dumps({"type": "subscribed", "account": "acc_01m6tx3k9f2qw8r7bznd5yvh4c"})
+        )
         async for raw in socket:
             if raw == "ping":
                 connection.received.append("ping")
