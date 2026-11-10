@@ -3,6 +3,14 @@
 Each release names the API document snapshot it was built from (`openapi.json`, with the
 fingerprint `python scripts/spec_diff.py --fingerprint openapi.json` prints).
 
+## Unreleased
+
+### Changed
+
+- The README's examples choose `fok` or `ioc` for a market order, whichever the symbol allows,
+  instead of the first filling mode the symbol lists (which can be `boc`, for limit orders only),
+  and stop with a message when it allows neither.
+
 ## 0.1.0 (10 Nov 2026)
 
 The first release.
