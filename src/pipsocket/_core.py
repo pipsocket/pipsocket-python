@@ -534,22 +534,59 @@ def drive(spec: Spec, settings: Settings) -> Generator[Step, Attempt | None, Any
             return verdict.value
 
         maybe_sent = maybe_sent or verdict.maybe_sent
-        wait = next_wait(verdict, retries, settings) if retries < settings.max_retries else None
-        if verdict.retry == "once":
-            assert verdict.once_key is not None
-            if verdict.once_key in retried_once:
-                wait = None
-            retried_once.add(verdict.once_key)
-        if wait is not None and settings.clock() + wait > deadline:
-            wait = None
+        try:
+            wait = plan_wait(verdict, retries, retried_once, deadline, settings)
+        except Exception as error:
+            ending = scheduling_failed(spec, verdict, maybe_sent, error)
+            if ending is error:
+                raise
+            raise ending from error
         if wait is None:
             raise final_error(spec, verdict, maybe_sent)
 
         retries += 1
-        yield Wait(wait)
+        try:
+            yield Wait(wait)  # the shell throws a failed sleep back in here
+            late = settings.clock() > deadline
+        except Exception as error:
+            ending = scheduling_failed(spec, verdict, maybe_sent, error)
+            if ending is error:
+                raise
+            raise ending from error
         # The wait may have run long: no new attempt starts after the deadline.
-        if settings.clock() > deadline:
+        if late:
             raise final_error(spec, verdict, maybe_sent)
+
+
+def plan_wait(
+    verdict: Verdict,
+    retries: int,
+    retried_once: set[str],
+    deadline: float,
+    settings: Settings,
+) -> float | None:
+    """How long to wait before trying again, or None to stop."""
+    wait = next_wait(verdict, retries, settings) if retries < settings.max_retries else None
+    if verdict.retry == "once":
+        assert verdict.once_key is not None
+        if verdict.once_key in retried_once:
+            wait = None
+        retried_once.add(verdict.once_key)
+    if wait is not None and settings.clock() + wait > deadline:
+        wait = None
+    return wait
+
+
+def scheduling_failed(
+    spec: Spec, verdict: Verdict, maybe_sent: bool, error: Exception
+) -> Exception:
+    """The clock, the random source or the sleep failed while a retry was planned. The call
+    ends as it stands: OutcomeUnknown if the trade may have been sent, else that failure."""
+    if spec.kind is Kind.TRADE and maybe_sent:
+        return final_error(spec, verdict, maybe_sent)
+    if spec.kind is Kind.TRADE:
+        attach_key(error, spec.idempotency_key)
+    return error
 
 
 def final_error(spec: Spec, verdict: Verdict, maybe_sent: bool) -> Exception:
@@ -589,5 +626,5 @@ def next_wait(verdict: Verdict, retries: int, settings: Settings) -> float | Non
         return None
     if verdict.retry_after is not None:
         return float(verdict.retry_after)
-    nominal = min(FIRST_WAIT * 2**retries, LONGEST_WAIT)
+    nominal = min(FIRST_WAIT * 2 ** min(retries, 16), LONGEST_WAIT)
     return nominal * (0.5 + 0.5 * settings.random())

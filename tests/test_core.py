@@ -24,6 +24,7 @@ from pipsocket import (
     APIConnectionError,
     AsyncPipsocket,
     AuthenticationError,
+    EngineBusy,
     OutcomeUnknown,
     Pipsocket,
 )
@@ -437,3 +438,74 @@ def test_json_nested_too_deep_is_an_unreadable_answer(flavour: str) -> None:
 
     assert (caught.value.status, caught.value.raw) == (200, deep)
     assert caught.value.idempotency_key == KEY
+
+
+# The clock, the random source or the sleep failing while a retry is planned.
+
+
+def lost_answer(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadError("connection reset after the request was written")
+
+
+def broken(*args: Any) -> Any:
+    raise RuntimeError("broken")
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+@pytest.mark.parametrize("part", ["random", "sleep", "clock"])
+def test_a_failing_scheduler_after_a_maybe_sent_attempt_is_outcome_unknown(
+    flavour: str, part: str
+) -> None:
+    spec = trade("place_order", "POST", ACCOUNT, "/orders", {"symbol": "EURUSD"}, KEY)
+    calls = {"clock": 0}
+
+    def clock() -> float:
+        calls["clock"] += 1
+        if part == "clock" and calls["clock"] > 1:  # the start reads it once; then it fails
+            raise RuntimeError("broken")
+        return 1000.0
+
+    options: dict[str, Any] = {"_clock": clock, "_random": broken if part == "random" else None}
+
+    if flavour == "sync":
+        http = httpx.Client(transport=FakeTransport(lost_answer))
+        sync_sleep = broken if part == "sleep" else (lambda seconds: None)
+        ps = Pipsocket(API_KEY, http_client=http, _sleep=sync_sleep, **options)
+        with pytest.raises(OutcomeUnknown) as caught:
+            ps._requester.call(spec, None, None)  # pyright: ignore[reportPrivateUsage]
+    else:
+
+        async def async_sleep(seconds: float) -> None:
+            if part == "sleep":
+                raise RuntimeError("broken")
+
+        async def run() -> None:
+            http = httpx.AsyncClient(transport=FakeTransport(lost_answer))
+            ps = AsyncPipsocket(API_KEY, http_client=http, _sleep=async_sleep, **options)
+            await ps._requester.call(spec, None, None)  # pyright: ignore[reportPrivateUsage]
+
+        with pytest.raises(OutcomeUnknown) as caught:
+            asyncio.run(run())
+
+    assert caught.value.idempotency_key == KEY
+
+
+def test_a_long_retry_sequence_doesnt_overflow_its_backoff() -> None:
+    def busy(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b'{"error": "engine_busy", "message": "Busy."}')
+
+    clock = FakeClock()
+    ps = Pipsocket(
+        API_KEY,
+        http_client=httpx.Client(transport=FakeTransport(busy)),
+        max_retries=1100,
+        retry_deadline=10**9,
+        _clock=lambda: 1000.0,  # time never passes: every retry is planned
+        _sleep=clock.sleep,
+    )
+
+    with pytest.raises(EngineBusy):
+        ps.account(ACCOUNT).positions.list()
+
+    assert len(clock.sleeps) == 1100
+    assert max(clock.sleeps) <= 8.0

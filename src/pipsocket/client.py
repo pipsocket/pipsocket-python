@@ -124,8 +124,12 @@ class _Requester:
                     step = run.send(self.attempt(spec, attempt_timeout))
                 else:
                     assert isinstance(step, Wait)
-                    self.sleep(step.seconds)
-                    step = run.send(None)
+                    try:
+                        self.sleep(step.seconds)
+                    except Exception as error:
+                        step = run.throw(error)  # the core decides how the call ends
+                    else:
+                        step = run.send(None)
         except StopIteration as done:
             return done.value
         finally:
