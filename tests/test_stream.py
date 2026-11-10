@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 import time
@@ -437,6 +438,7 @@ def test_an_async_wait_leaves_no_task_behind(server: FakeStreamServer) -> None:
             await anext(events)
             for _ in range(3):
                 await acct.requests.wait(REQUEST_ID, timeout=0.3)
+            await asyncio.sleep(0)  # a cancelled task ends on the loop's next turn
             return [repr(task) for task in asyncio.all_tasks() if "Event.wait" in repr(task)]
 
     assert asyncio.run(run()) == []
@@ -480,3 +482,34 @@ def test_wait_with_a_stream_open_keeps_its_deadline(flavour: str, server: FakeSt
 
         took = asyncio.run(run())
     assert took < 0.3
+
+
+@pytest.mark.parametrize("delay", range(8))
+def test_cancelling_a_wait_is_never_swallowed(delay: int) -> None:
+    """The caller's cancellation, landing at any point after the lookup answers, ends the
+    wait cancelled: it never returns the request instead."""
+
+    async def run() -> asyncio.Task[Any]:
+        loop = asyncio.get_running_loop()
+        waiting: list[asyncio.Task[Any]] = []
+
+        def cancel_after(rounds: int) -> None:
+            if rounds:
+                loop.call_soon(cancel_after, rounds - 1)
+            else:
+                waiting[0].cancel()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            loop.call_soon(cancel_after, delay)
+            return httpx.Response(200, json=pending())
+
+        ps = AsyncPipsocket(
+            API_KEY, http_client=httpx.AsyncClient(transport=FakeTransport(handler))
+        )
+        task = asyncio.ensure_future(ps.account(ACCOUNT).requests.wait(REQUEST_ID, timeout=0.05))
+        waiting.append(task)
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return task
+
+    assert asyncio.run(run()).cancelled()

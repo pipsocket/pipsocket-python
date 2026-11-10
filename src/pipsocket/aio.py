@@ -281,9 +281,8 @@ class _Seen:
         try:
             await asyncio.wait({settled}, timeout=seconds)
         finally:
-            settled.cancel()
-            with contextlib.suppress(BaseException):
-                await settled
+            # Not awaited: awaiting it could swallow a cancellation of this wait() itself.
+            abandon(settled, self.failed)
         return self.request
 
     async def race(self, lookup: Awaitable[Any], seconds: float) -> TradeRequest:
@@ -302,9 +301,7 @@ class _Seen:
             abandon(looking, self.failed)
             raise
         finally:
-            settled.cancel()
-            with contextlib.suppress(BaseException):
-                await settled
+            abandon(settled, self.failed)  # not awaited, as above
         if self.request is not None:
             abandon(looking, self.failed)
             return self.request
@@ -688,9 +685,9 @@ def order_fields(arguments: dict[str, Any]) -> dict[str, Any]:
     return {name: arguments[name] for name in ORDER_FIELDS}
 
 
-# Lookups wait() stopped waiting for: cancelled but not awaited, since their cleanup may be
-# slow. Kept until they end, so they aren't collected while running; a failure they still
-# meet (a 401 that lands first) is reported.
+# Tasks a wait() stopped waiting for: cancelled but not awaited, since a lookup's cleanup may
+# be slow and awaiting could swallow the caller's own cancellation. Kept until they end, so
+# they aren't collected while running; a failure a lookup still meets (a 401) is reported.
 _abandoned: set[asyncio.Future[Any]] = set()
 
 
