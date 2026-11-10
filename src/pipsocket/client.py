@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -187,8 +188,7 @@ class _Requester:
         try:
             while True:
                 if isinstance(step, Look):
-                    attempt_timeout = min(self.options.timeout, step.seconds)
-                    outcome = self.look(spec, attempt_timeout, seen)
+                    outcome = self.look(spec, step.seconds, seen)
                     if isinstance(outcome, PipsocketError):
                         report(streams, outcome)
                     step = run.send(outcome)
@@ -204,14 +204,20 @@ class _Requester:
             for unwatch in undo:
                 unwatch()
 
-    def look(self, spec: Spec, timeout: float, seen: _Seen | None) -> TradeRequest | PipsocketError:
-        """One lookup for wait(). A settlement an open stream sees meanwhile ends it at once."""
+    def look(self, spec: Spec, seconds: float, seen: _Seen | None) -> TradeRequest | PipsocketError:
+        """One lookup for wait(), over within `seconds` all told (the HTTP timeout applies to
+        each network operation, so a slow answer could otherwise run past wait()'s deadline),
+        and ended at once by a settlement an open stream sees meanwhile. A lookup that runs
+        over, or that the stream beats, finishes on its own: it is only a read."""
+        attempt_timeout = min(self.options.timeout, seconds)
 
         def lookup() -> TradeRequest:
-            return cast(TradeRequest, self.call(spec, timeout, 0))
+            return cast(TradeRequest, self.call(spec, attempt_timeout, 0))
 
         try:
-            return lookup() if seen is None else seen.race(lookup)
+            if seen is None and math.isinf(seconds):
+                return lookup()
+            return (seen or _Seen()).race(lookup, seconds)
         except PipsocketError as error:
             return error
 
@@ -255,7 +261,7 @@ class _Requester:
 class _Seen:
     """A request an open stream saw settle, for a wait()."""
 
-    def __init__(self, failed: Callable[[PipsocketError], None]) -> None:
+    def __init__(self, failed: Callable[[PipsocketError], None] = lambda error: None) -> None:
         self.request: TradeRequest | None = None
         self.changed = threading.Condition()
         # Told of a lookup's failure even when the stream won the race: a 401 stops it too.
@@ -274,10 +280,10 @@ class _Seen:
             self.changed.wait_for(lambda: self.request is not None, seconds)
             return self.request
 
-    def race(self, lookup: Callable[[], TradeRequest]) -> TradeRequest:
-        """Look the request up, unless a stream sees it settle first. A final state seen on
-        the stream is never replaced by an older, outstanding one from the lookup. (The
-        lookup runs on, as a read, if the stream wins.)"""
+    def race(self, lookup: Callable[[], TradeRequest], seconds: float) -> TradeRequest:
+        """Look the request up within `seconds`, unless a stream sees it settle first. A final
+        state seen on the stream is never replaced by an older, outstanding one from the
+        lookup. (The lookup runs on, as a read, if it is beaten or runs over.)"""
         answers: list[TradeRequest | BaseException] = []
 
         def run() -> None:
@@ -293,10 +299,13 @@ class _Seen:
                 self.changed.notify_all()
 
         threading.Thread(target=run, daemon=True).start()
+        limit = None if math.isinf(seconds) else seconds
         with self.changed:
-            self.changed.wait_for(lambda: bool(answers) or self.request is not None)
+            self.changed.wait_for(lambda: bool(answers) or self.request is not None, limit)
             if self.request is not None:
                 return self.request
+            if not answers:
+                raise APITimeoutError("The lookup did not answer within wait()'s timeout.")
         answer = answers[0]
         if isinstance(answer, BaseException):
             raise answer

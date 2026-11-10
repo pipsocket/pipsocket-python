@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 from collections.abc import Awaitable, Callable, Iterable
 from types import TracebackType
 from typing import Any, cast
@@ -190,8 +191,7 @@ class _Requester:
         try:
             while True:
                 if isinstance(step, Look):
-                    attempt_timeout = min(self.options.timeout, step.seconds)
-                    outcome = await self.look(spec, attempt_timeout, seen)
+                    outcome = await self.look(spec, step.seconds, seen)
                     if isinstance(outcome, PipsocketError):
                         report(streams, outcome)
                     step = run.send(outcome)
@@ -208,13 +208,18 @@ class _Requester:
                 unwatch()
 
     async def look(
-        self, spec: Spec, timeout: float, seen: _Seen | None
+        self, spec: Spec, seconds: float, seen: _Seen | None
     ) -> TradeRequest | PipsocketError:
-        """One lookup for wait(). A settlement an open stream sees meanwhile ends it at once."""
+        """One lookup for wait(), over within `seconds` all told (the HTTP timeout applies to
+        each network operation, so a slow answer could otherwise run past wait()'s deadline),
+        and ended at once by a settlement an open stream sees meanwhile. A lookup that runs
+        over, or that the stream beats, is cancelled and left to wind down on its own (its
+        cleanup may be slow): it is only a read."""
+        attempt_timeout = min(self.options.timeout, seconds)
         try:
-            if seen is None:
-                return cast(TradeRequest, await self.call(spec, timeout, 0))
-            return await seen.race(self.call(spec, timeout, 0))
+            if seen is None and math.isinf(seconds):
+                return cast(TradeRequest, await self.call(spec, attempt_timeout, 0))
+            return await (seen or _Seen()).race(self.call(spec, attempt_timeout, 0), seconds)
         except PipsocketError as error:
             return error
 
@@ -258,7 +263,7 @@ class _Requester:
 class _Seen:
     """A request an open stream saw settle, for a wait()."""
 
-    def __init__(self, failed: Callable[[PipsocketError], None]) -> None:
+    def __init__(self, failed: Callable[[PipsocketError], None] = lambda error: None) -> None:
         self.request: TradeRequest | None = None
         self.changed = asyncio.Event()
         # Told of a lookup's failure even when the stream won the race: a 401 stops it too.
@@ -276,35 +281,41 @@ class _Seen:
         try:
             await asyncio.wait({settled}, timeout=seconds)
         finally:
-            await finish(settled)
+            settled.cancel()
+            with contextlib.suppress(BaseException):
+                await settled
         return self.request
 
-    async def race(self, lookup: Awaitable[Any]) -> TradeRequest:
-        """Look the request up, unless a stream sees it settle first: then the lookup (a
-        read) is cancelled. A final state seen on the stream is never replaced by an older,
-        outstanding one from the lookup."""
+    async def race(self, lookup: Awaitable[Any], seconds: float) -> TradeRequest:
+        """Look the request up within `seconds`, unless a stream sees it settle first. A final
+        state seen on the stream is never replaced by an older, outstanding one from the
+        lookup. A lookup that is beaten, runs over or outlives a cancelled wait() is cancelled
+        without waiting for it."""
         looking = asyncio.ensure_future(lookup)
         settled = asyncio.ensure_future(self.changed.wait())
+        limit = None if math.isinf(seconds) else seconds
         try:
-            await asyncio.wait({looking, settled}, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(
+                {looking, settled}, timeout=limit, return_when=asyncio.FIRST_COMPLETED
+            )
+        except BaseException:
+            abandon(looking, self.failed)
+            raise
         finally:
-            await finish(settled)
-            if self.request is not None or not looking.done():
-                await finish(looking)
+            settled.cancel()
+            with contextlib.suppress(BaseException):
+                await settled
         if self.request is not None:
+            abandon(looking, self.failed)
             return self.request
+        if not looking.done():
+            abandon(looking, self.failed)
+            raise APITimeoutError("The lookup did not answer within wait()'s timeout.")
         try:
             return cast(TradeRequest, looking.result())
         except PipsocketError as error:
             self.failed(error)
             raise
-
-
-async def finish(task: asyncio.Future[Any]) -> None:
-    """Cancel a task this wait owns, and wait for it, so none is left running."""
-    task.cancel()
-    with contextlib.suppress(BaseException):
-        await task
 
 
 def newest(request: TradeRequest, streams: list[Any], key: str | None) -> TradeRequest:
@@ -678,17 +689,17 @@ def order_fields(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 # Lookups wait() stopped waiting for: cancelled but not awaited, since their cleanup may be
-# slow. Kept until they end, so they aren't collected while running, and their errors read.
+# slow. Kept until they end, so they aren't collected while running; a failure they still
+# meet (a 401 that lands first) is reported.
 _abandoned: set[asyncio.Future[Any]] = set()
 
 
-def abandon(task: asyncio.Future[Any]) -> None:
+def abandon(task: asyncio.Future[Any], failed: Callable[[PipsocketError], None]) -> None:
+    def ended(task: asyncio.Future[Any]) -> None:
+        _abandoned.discard(task)
+        if not task.cancelled() and isinstance(task.exception(), PipsocketError):
+            failed(cast(PipsocketError, task.exception()))
+
     task.cancel()
     _abandoned.add(task)
-    task.add_done_callback(_ended)
-
-
-def _ended(task: asyncio.Future[Any]) -> None:
-    _abandoned.discard(task)
-    if not task.cancelled():
-        task.exception()
+    task.add_done_callback(ended)

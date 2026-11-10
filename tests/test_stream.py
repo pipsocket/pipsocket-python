@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from pipsocket import (
+    APITimeoutError,
     AsyncPipsocket,
     AuthenticationError,
     NotFound,
@@ -28,7 +29,7 @@ from pipsocket.stream import (  # pyright: ignore[reportPrivateUsage]
 )
 
 from .fake_stream import FakeStreamServer
-from .fakes import ACCOUNT, API_KEY
+from .fakes import ACCOUNT, API_KEY, FakeTransport
 
 ACCOUNT_VIEW = {"id": ACCOUNT, "login": 5001, "server": "Demo-Server", "status": "connected"}
 REQUEST_ID = "req_5f0c2a9e41d7b3a8c6e2f190"
@@ -62,12 +63,12 @@ def server() -> Iterator[FakeStreamServer]:
 
 
 def sync_client(server: FakeStreamServer, **extra: Any) -> Pipsocket:
-    http = httpx.Client(transport=httpx.MockTransport(rest_api(**extra)))
+    http = httpx.Client(transport=FakeTransport(rest_api(**extra)))
     return Pipsocket(API_KEY, stream_url=server.url, http_client=http)
 
 
 def async_client(server: FakeStreamServer, **extra: Any) -> AsyncPipsocket:
-    http = httpx.AsyncClient(transport=httpx.MockTransport(rest_api(**extra)))
+    http = httpx.AsyncClient(transport=FakeTransport(rest_api(**extra)))
     return AsyncPipsocket(API_KEY, stream_url=server.url, http_client=http)
 
 
@@ -160,7 +161,7 @@ def test_a_failing_upgrade_backs_off_and_connects(server: FakeStreamServer) -> N
 
 
 def test_an_unreachable_stream_keeps_trying_until_closed() -> None:
-    http = httpx.Client(transport=httpx.MockTransport(rest_api()))
+    http = httpx.Client(transport=FakeTransport(rest_api()))
     ps = Pipsocket(API_KEY, stream_url="ws://127.0.0.1:9", http_client=http)
 
     with ps.account(ACCOUNT).stream() as events:
@@ -292,7 +293,7 @@ def slow_lookup_api(delay: float) -> Callable[[httpx.Request], Any]:
 
 def test_a_stream_settlement_beats_a_slow_lookup_async(server: FakeStreamServer) -> None:
     async def run() -> tuple[str, float]:
-        http = httpx.AsyncClient(transport=httpx.MockTransport(slow_lookup_api(0.5)))
+        http = httpx.AsyncClient(transport=FakeTransport(slow_lookup_api(0.5)))
         ps = AsyncPipsocket(API_KEY, stream_url=server.url, http_client=http)
         acct = ps.account(ACCOUNT)
         async with ps, acct.stream() as events:
@@ -316,7 +317,7 @@ def test_a_stream_settlement_beats_a_slow_lookup_sync(server: FakeStreamServer) 
             time.sleep(0.5)
         return rest_api()(request)
 
-    http = httpx.Client(transport=httpx.MockTransport(handle))
+    http = httpx.Client(transport=FakeTransport(handle))
     acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
     with acct.stream() as events:
         next(events)
@@ -341,7 +342,7 @@ def test_an_event_before_the_rest_answer_wins(server: FakeStreamServer) -> None:
             return httpx.Response(202, json=pending())
         return rest_api()(request)
 
-    http = httpx.Client(transport=httpx.MockTransport(handle))
+    http = httpx.Client(transport=FakeTransport(handle))
     acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
     with acct.stream() as events:
         next(events)
@@ -359,7 +360,7 @@ def test_a_401_on_a_wait_lookup_stops_the_stream(server: FakeStreamServer) -> No
             return httpx.Response(401, json={"error": "invalid_api_key", "message": "Rolled."})
         return rest_api()(request)
 
-    http = httpx.Client(transport=httpx.MockTransport(handle))
+    http = httpx.Client(transport=FakeTransport(handle))
     acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
     with acct.stream() as events:
         next(events)
@@ -414,7 +415,7 @@ def test_a_401_from_a_lookup_the_stream_beat_still_stops_it(server: FakeStreamSe
             return httpx.Response(401, json={"error": "invalid_api_key", "message": "Rolled."})
         return rest_api()(request)
 
-    http = httpx.Client(transport=httpx.MockTransport(handle))
+    http = httpx.Client(transport=FakeTransport(handle))
     acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
     with acct.stream() as events:
         next(events)
@@ -439,3 +440,43 @@ def test_an_async_wait_leaves_no_task_behind(server: FakeStreamServer) -> None:
             return [repr(task) for task in asyncio.all_tasks() if "Event.wait" in repr(task)]
 
     assert asyncio.run(run()) == []
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_wait_with_a_stream_open_keeps_its_deadline(flavour: str, server: FakeStreamServer) -> None:
+    """A lookup that stalls past the deadline ends the wait on time, stream open or not."""
+
+    def stalls(request: httpx.Request) -> httpx.Response:
+        if "/requests/" in request.url.path:
+            time.sleep(0.6)
+        return rest_api()(request)
+
+    async def stalls_async(request: httpx.Request) -> httpx.Response:
+        if "/requests/" in request.url.path:
+            await asyncio.sleep(0.6)
+        return rest_api()(request)
+
+    if flavour == "sync":
+        http = httpx.Client(transport=FakeTransport(stalls))
+        acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
+        with acct.stream() as events:
+            next(events)
+            started = time.monotonic()
+            with pytest.raises(APITimeoutError):
+                acct.requests.wait(REQUEST_ID, timeout=0.1)
+            took = time.monotonic() - started
+    else:
+
+        async def run() -> float:
+            http = httpx.AsyncClient(transport=FakeTransport(stalls_async))
+            ps = AsyncPipsocket(API_KEY, stream_url=server.url, http_client=http)
+            acct = ps.account(ACCOUNT)
+            async with ps, acct.stream() as events:
+                await anext(events)
+                started = time.monotonic()
+                with pytest.raises(APITimeoutError):
+                    await acct.requests.wait(REQUEST_ID, timeout=0.1)
+                return time.monotonic() - started
+
+        took = asyncio.run(run())
+    assert took < 0.3
