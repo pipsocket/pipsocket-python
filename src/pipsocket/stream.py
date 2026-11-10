@@ -476,8 +476,9 @@ class AsyncStream:
         if self._task is None:
             return
         self._engine.feed(core.Close())
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
+        # Shielded: if the caller is cancelled meanwhile, that cancellation is the caller's to
+        # see, and the engine, already told to close, finishes shutting down on its own.
+        await asyncio.shield(self._task)
 
     def _feed(self, event: core.Input) -> None:
         self._engine.feed(event)

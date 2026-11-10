@@ -513,3 +513,34 @@ def test_cancelling_a_wait_is_never_swallowed(delay: int) -> None:
         return task
 
     assert asyncio.run(run()).cancelled()
+
+
+def test_cancelling_the_caller_during_shutdown_isnt_swallowed(
+    server: FakeStreamServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_shut = Engine.shut
+
+    async def slow_shut(self: Engine) -> None:
+        await asyncio.sleep(0.2)
+        await real_shut(self)
+
+    monkeypatch.setattr(Engine, "shut", slow_shut)
+
+    async def run() -> bool:
+        closing = asyncio.Event()
+
+        async def use_stream() -> None:
+            ps = async_client(server)
+            async with ps, ps.account(ACCOUNT).stream() as events:
+                await anext(events)
+                closing.set()  # the context exit closes the stream next
+
+        task = asyncio.ensure_future(use_stream())
+        await closing.wait()
+        await asyncio.sleep(0.05)  # shutdown is under way
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return task.cancelled()
+
+    assert asyncio.run(run())
