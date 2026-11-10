@@ -415,9 +415,12 @@ class _AsyncSink:
     def __init__(self, limit: int) -> None:
         self.items: deque[Event | _End] = deque()
         self.limit = limit
+        self.closed = False
         self.ready = asyncio.Event()
 
     def put(self, item: Event | _End) -> list[Event]:
+        if self.closed:
+            return []  # the caller closed the stream: nothing more is delivered
         if not isinstance(item, _End) and len(self.items) >= self.limit:
             dropped = [event for event in self.items if not isinstance(event, _End)] + [item]
             self.items.clear()
@@ -427,7 +430,8 @@ class _AsyncSink:
         return []
 
     def close(self) -> None:
-        """The caller closed the stream: nothing still queued is delivered."""
+        """The caller closed the stream: nothing still queued, or put later, is delivered."""
+        self.closed = True
         self.items.clear()
         self.items.append(_End(None))
         self.ready.set()
@@ -533,10 +537,13 @@ class _ThreadSink:
     def __init__(self, limit: int) -> None:
         self.items: deque[Event | _End] = deque()
         self.limit = limit
+        self.closed = False
         self.ready = threading.Condition()
 
     def put(self, item: Event | _End) -> list[Event]:
         with self.ready:
+            if self.closed:
+                return []  # the caller closed the stream: nothing more is delivered
             if not isinstance(item, _End) and len(self.items) >= self.limit:
                 dropped = [event for event in self.items if not isinstance(event, _End)] + [item]
                 self.items.clear()
@@ -546,8 +553,9 @@ class _ThreadSink:
             return []
 
     def close(self) -> None:
-        """The caller closed the stream: nothing still queued is delivered."""
+        """The caller closed the stream: nothing still queued, or put later, is delivered."""
         with self.ready:
+            self.closed = True
             self.items.clear()
             self.items.append(_End(None))
             self.ready.notify_all()
