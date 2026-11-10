@@ -54,6 +54,13 @@ class _End:
         self.error = error
 
 
+class _Crashed:
+    """A spawned task's unexpected failure, queued for the engine's loop to end the stream."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+
 class Sink(Protocol):
     """Where the engine puts events for the caller."""
 
@@ -161,7 +168,7 @@ class Engine:
         self.reader = reader
         self.sink = sink
         self.settled = settled
-        self.inputs: asyncio.Queue[core.Input] = asyncio.Queue()
+        self.inputs: asyncio.Queue[core.Input | _Crashed] = asyncio.Queue()
         self.socket: ClientConnection | None = None
         self.socket_generation = 0
         self.tasks: set[asyncio.Task[Any]] = set()
@@ -181,6 +188,8 @@ class Engine:
             while not self.finished:
                 event = next_event or await self.inputs.get()
                 next_event = None
+                if isinstance(event, _Crashed):
+                    raise event.error
                 self.dropped = None
                 for action in self.machine.handle(event):
                     await self.do(action)
@@ -212,7 +221,17 @@ class Engine:
     def spawn(self, work: Awaitable[Any]) -> None:
         task = asyncio.ensure_future(work)
         self.tasks.add(task)
-        task.add_done_callback(self.tasks.discard)
+        task.add_done_callback(self.supervise)
+
+    def supervise(self, task: asyncio.Task[Any]) -> None:
+        """A spawned task (opening, listening, a read) that fails unexpectedly ends the stream:
+        its own expected failures are already inputs to the machine."""
+        self.tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if isinstance(error, Exception):
+            self.inputs.put_nowait(_Crashed(error))
 
     async def do(self, action: core.Action) -> None:
         match action:
@@ -325,7 +344,7 @@ def handshake_error(status: int, raw: bytes) -> PipsocketError:
     and account checks are the same); anything else is StreamHandshakeError with the status."""
     try:
         body = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         body = None
     if status in (401, 404):
         if isinstance(body, dict) and isinstance(body.get("error"), str):  # pyright: ignore[reportUnknownMemberType]

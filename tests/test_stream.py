@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import pytest
 
+import pipsocket.stream as stream_module
 from pipsocket import (
     APITimeoutError,
     AsyncPipsocket,
@@ -602,3 +603,59 @@ def test_the_callers_own_exception_isnt_replaced(
 
     with pytest.raises(ValueError, match="the caller's own"):
         asyncio.run(run())
+
+
+def first_event(flavour: str, server: FakeStreamServer) -> Any:
+    """The first thing a stream gives, sync or async: an event, or the error it ends with."""
+    if flavour == "sync":
+        with sync_client(server).account(ACCOUNT).stream() as events:
+            return next(events)
+
+    async def run() -> Any:
+        ps = async_client(server)
+        async with ps, ps.account(ACCOUNT).stream() as events:
+            return await asyncio.wait_for(anext(events), 5)
+
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_failure_while_opening_ends_the_stream(
+    flavour: str, server: FakeStreamServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server.refuse = lambda _: (403, {})
+
+    def broken(status: int, raw: bytes) -> Any:
+        raise RuntimeError("a bug while reading the refusal")
+
+    monkeypatch.setattr(stream_module, "handshake_error", broken)
+
+    with pytest.raises(StreamError) as caught:
+        first_event(flavour, server)
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_failure_while_listening_ends_the_stream(
+    flavour: str, server: FakeStreamServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(text: str) -> Any:
+        raise RuntimeError("a bug while reading a message")
+
+    monkeypatch.setattr(stream_module, "parse", broken)
+
+    with pytest.raises(StreamError) as caught:
+        first_event(flavour, server)
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_refusal_nested_too_deep_is_still_a_refusal(
+    flavour: str, server: FakeStreamServer
+) -> None:
+    server.refuse = lambda _: (403, b"[" * 100_000 + b"0" + b"]" * 100_000)
+
+    with pytest.raises(StreamHandshakeError):
+        first_event(flavour, server)

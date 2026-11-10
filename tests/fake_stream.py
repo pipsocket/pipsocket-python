@@ -19,7 +19,7 @@ from typing import Any
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.http11 import Request, Response
 
-Refusal = tuple[int, dict[str, Any]] | None
+Refusal = tuple[int, dict[str, Any] | bytes] | None
 
 
 @dataclass
@@ -68,7 +68,8 @@ class FakeStreamServer:
         if refusal is None:
             return None
         status, body = refusal
-        response = connection.respond(HTTPStatus(status), json.dumps(body))
+        text = body.decode() if isinstance(body, bytes) else json.dumps(body)
+        response = connection.respond(HTTPStatus(status), text)
         response.headers["Content-Type"] = "application/json"
         return response
 
