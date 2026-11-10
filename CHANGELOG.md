@@ -18,7 +18,8 @@ fingerprint `python scripts/spec_diff.py --fingerprint openapi.json` prints).
   sent again, keep-alive, and a `resync` event after every reconnection or gap carrying a new
   snapshot and the history since the last checkpoint. A stream open on an account handle ends
   that handle's `requests.wait()` as soon as the request settles.
-- `websockets` is now a dependency.
+- `websockets` (16.1 or later, which drops credentials on a redirect to another origin) is now
+  a dependency.
 
 ## 0.1.0a1
 

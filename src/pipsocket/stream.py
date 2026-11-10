@@ -585,7 +585,12 @@ class Stream:
         self.close()
 
     def _run(self, started: threading.Event) -> None:
-        loop = asyncio.new_event_loop()
+        try:
+            loop = asyncio.new_event_loop()
+        except Exception as error:  # out of file descriptors, say
+            self._sink.put(_End(unexpected(error)))
+            started.set()
+            return
         self._loop = loop
 
         async def read(request: core.Read) -> Any:

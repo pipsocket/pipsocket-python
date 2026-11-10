@@ -659,3 +659,33 @@ def test_a_refusal_nested_too_deep_is_still_a_refusal(
 
     with pytest.raises(StreamHandshakeError):
         first_event(flavour, server)
+
+
+def test_the_key_isnt_sent_to_another_origin_on_a_redirect(server: FakeStreamServer) -> None:
+    elsewhere = FakeStreamServer()
+    try:
+        server.redirect = elsewhere.url
+        acct = sync_client(server).account(ACCOUNT)
+
+        with acct.stream() as events:
+            next(events)
+
+        (connection,) = elsewhere.connections
+        assert "Authorization" not in connection.headers
+    finally:
+        elsewhere.stop()
+
+
+def test_a_sync_stream_that_cant_start_raises_instead_of_hanging(
+    server: FakeStreamServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_loop() -> Any:
+        raise OSError("too many open files")
+
+    acct = sync_client(server).account(ACCOUNT)
+    monkeypatch.setattr(stream_module.asyncio, "new_event_loop", no_loop)
+
+    with acct.stream() as events, pytest.raises(StreamError) as caught:
+        next(events)
+
+    assert isinstance(caught.value.__cause__, OSError)

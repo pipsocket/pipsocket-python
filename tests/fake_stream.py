@@ -36,6 +36,8 @@ class FakeStreamServer:
         self.upgrades = 0
         # Called with the upgrade's number (1, 2, ...): a (status, body) refusal, or None.
         self.refuse: Callable[[int], Refusal] = lambda _: None
+        # When set, every upgrade is redirected there (302).
+        self.redirect: str | None = None
         # Events sent to every connection once its tick set is answered.
         self.after_ticks: list[dict[str, Any]] = []
         self.server: Server | None = None
@@ -64,6 +66,10 @@ class FakeStreamServer:
 
     def _process_request(self, connection: ServerConnection, request: Request) -> Response | None:
         self.upgrades += 1
+        if self.redirect is not None:
+            moved = connection.respond(HTTPStatus.FOUND, "")
+            moved.headers["Location"] = self.redirect + request.path
+            return moved
         refusal = self.refuse(self.upgrades)
         if refusal is None:
             return None
