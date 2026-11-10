@@ -19,6 +19,7 @@ from pipsocket import (
     AuthenticationError,
     NotFound,
     Pipsocket,
+    StreamError,
     StreamHandshakeError,
     TradeRequest,
     _stream_core,
@@ -544,3 +545,60 @@ def test_cancelling_the_caller_during_shutdown_isnt_swallowed(
         return task.cancelled()
 
     assert asyncio.run(run())
+
+
+def break_the_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The machine raises a plain RuntimeError on the stream's first message."""
+    real_handle = _stream_core.StreamMachine.handle
+
+    def handle(self: _stream_core.StreamMachine, event: _stream_core.Input) -> Any:
+        if isinstance(event, _stream_core.Message):
+            raise RuntimeError("a bug in the SDK")
+        return real_handle(self, event)
+
+    monkeypatch.setattr(_stream_core.StreamMachine, "handle", handle)
+
+
+def test_an_engine_failure_ends_a_sync_stream(
+    server: FakeStreamServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    break_the_machine(monkeypatch)
+    acct = sync_client(server).account(ACCOUNT)
+
+    with acct.stream() as events, pytest.raises(StreamError) as caught:
+        next(events)
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    events.close()  # a second close is harmless
+
+
+def test_an_engine_failure_ends_an_async_stream(
+    server: FakeStreamServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    break_the_machine(monkeypatch)
+
+    async def run() -> BaseException | None:
+        ps = async_client(server)
+        async with ps, ps.account(ACCOUNT).stream() as events:
+            try:
+                await asyncio.wait_for(anext(events), 5)
+            except StreamError as error:
+                return error.__cause__
+        return None
+
+    assert isinstance(asyncio.run(run()), RuntimeError)
+
+
+def test_the_callers_own_exception_isnt_replaced(
+    server: FakeStreamServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    break_the_machine(monkeypatch)
+
+    async def run() -> None:
+        ps = async_client(server)
+        async with ps, ps.account(ACCOUNT).stream():
+            await asyncio.sleep(0.2)  # the engine fails meanwhile
+            raise ValueError("the caller's own")
+
+    with pytest.raises(ValueError, match="the caller's own"):
+        asyncio.run(run())

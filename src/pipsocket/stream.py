@@ -191,6 +191,9 @@ class Engine:
                     next_event = core.Overflowed(tuple(self.dropped))
                 if isinstance(event, core.Close):
                     self.finish(None)
+        except Exception as error:
+            # A failure of the SDK's own: end the stream with it, so the caller hears of it.
+            self.finish(unexpected(error))
         finally:
             await self.shut()
 
@@ -299,6 +302,12 @@ class Engine:
             self.feed(core.Answered(read, error=failure))
         else:
             self.feed(core.Answered(read, value=value))
+
+
+def unexpected(error: Exception) -> StreamError:
+    failure = StreamError(f"The stream stopped unexpectedly: {error!r}")
+    failure.__cause__ = error
+    return failure
 
 
 def parse(text: str) -> core.Input:
@@ -443,7 +452,12 @@ class AsyncStream:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        await self.close()
+        try:
+            await self.close()
+        except Exception:
+            if exc is None:
+                raise
+            # An exception is already unwinding the caller's block: it isn't replaced.
 
     def __aiter__(self) -> AsyncStream:
         return self
@@ -572,6 +586,9 @@ class Stream:
 
         try:
             loop.run_until_complete(main())
+        except Exception as error:
+            # The engine ends itself on its own failures; this is anything around it.
+            self._sink.put(_End(unexpected(error)))
         finally:
             started.set()
             loop.close()
