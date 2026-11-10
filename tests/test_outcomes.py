@@ -716,7 +716,7 @@ def test_a_complete_answer_survives_a_failing_close(flavour: str, error: Excepti
 
 
 class Trickle(httpx.SyncByteStream, httpx.AsyncByteStream):
-    """A pending request, in three pieces 0.06 s apart."""
+    """A pending request, in three pieces 0.2 s apart (0.6 s in all)."""
 
     def __init__(self) -> None:
         body = json.dumps(request_body("pending")).encode()
@@ -724,12 +724,12 @@ class Trickle(httpx.SyncByteStream, httpx.AsyncByteStream):
 
     def __iter__(self) -> Iterator[bytes]:
         for piece in self.pieces:
-            time.sleep(0.06)
+            time.sleep(0.2)
             yield piece
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for piece in self.pieces:
-            await asyncio.sleep(0.06)
+            await asyncio.sleep(0.2)
             yield piece
 
 
@@ -754,7 +754,9 @@ def test_wait_ends_on_time_however_slowly_the_answer_comes(flavour: str) -> None
 
         with pytest.raises(pipsocket.APITimeoutError):
             asyncio.run(run())
-    assert time.monotonic() - started < 0.15
+    assert time.monotonic() - started < 0.4, (
+        "it ended at the deadline, not when the answer was complete"
+    )
 
 
 def test_wait_with_no_time_waits_for_its_one_lookup() -> None:
