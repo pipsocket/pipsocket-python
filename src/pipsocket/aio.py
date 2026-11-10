@@ -147,13 +147,17 @@ class _Requester:
             # Redirects would be sends the retry policy can't see: the API doesn't redirect.
             response = await self.http.send(request, stream=True, follow_redirects=False)
         except httpx.TransportError as error:
-            return no_answer(error)
+            return no_answer(error, request)
         except Exception as error:
             return Failed(error, maybe_sent=True)
         content = bytearray()
         try:
             async for chunk in response.aiter_bytes():
                 content += chunk
+        except httpx.CloseError:
+            # httpx closes the stream once it is read to the end: the body is all here. (Were
+            # a compressed tail missing, the JSON would not parse, and that is maybe sent too.)
+            pass
         except httpx.HTTPError as error:
             return body_lost(response, error, bytes(content))
         except Exception as error:

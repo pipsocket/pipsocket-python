@@ -123,12 +123,22 @@ def build_request(
     )
 
 
-def no_answer(error: httpx.TransportError) -> NoAnswer:
+def no_answer(error: httpx.TransportError, request: httpx.Request) -> NoAnswer:
+    """A transport error. It proves nothing was written only when it is a connect-phase error
+    httpx raised for this very request: one from a response hook (another client's request,
+    say) comes after the answer arrived."""
     return NoAnswer(
         error=error,
-        written=not isinstance(error, _NOT_WRITTEN),
+        written=not (isinstance(error, _NOT_WRITTEN) and raised_for(error, request)),
         timed_out=isinstance(error, httpx.TimeoutException),
     )
+
+
+def raised_for(error: httpx.RequestError, request: httpx.Request) -> bool:
+    try:
+        return error.request is request
+    except RuntimeError:  # an error made without a request
+        return False
 
 
 def answer(response: httpx.Response, content: bytes) -> Answer:

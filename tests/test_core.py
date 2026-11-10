@@ -208,3 +208,47 @@ def test_a_closed_client_before_sending_raises_as_it_is(flavour: str) -> None:
             asyncio.run(run_async())
 
     assert getattr(caught.value, "idempotency_key", None) == KEY
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_connect_error_from_a_response_hook_is_outcome_unknown(flavour: str) -> None:
+    def hook(response: httpx.Response) -> None:
+        raise httpx.ConnectError("a hook's own request could not connect")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=COMPLETED)
+
+    with pytest.raises(OutcomeUnknown) as caught:
+        through_shell(flavour, handler, {"response": [hook]})
+
+    assert isinstance(caught.value.cause.__cause__, httpx.ConnectError)
+
+
+class CompleteThenCloseFails(httpx.SyncByteStream, httpx.AsyncByteStream):
+    """The whole body arrives, then closing the stream fails."""
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield COMPLETED
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield COMPLETED
+
+    def close(self) -> None:
+        raise httpx.CloseError("close failed")
+
+    async def aclose(self) -> None:
+        raise httpx.CloseError("close failed")
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_complete_answer_survives_a_failing_close(flavour: str) -> None:
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, stream=CompleteThenCloseFails())
+
+    request = through_shell(flavour, handler)
+
+    assert request.state == "completed"
+    assert len(sent) == 1
