@@ -496,14 +496,17 @@ def refusal(
 def parse_json(raw: bytes) -> tuple[bool, Any]:
     try:
         return True, json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nesting too deep for the parser
         return False, None
+
+
+_WHOLE_SECONDS = re.compile(r"[0-9]{1,12}")  # ASCII digits only; longer is no usable wait
 
 
 def parse_retry_after(headers: Mapping[str, str]) -> int | None:
     """Retry-After in whole seconds. The HTTP-date form isn't used by the API, so it is ignored."""
     value = headers.get("retry-after")
-    if value is None or not value.strip().isdigit():
+    if value is None or not _WHOLE_SECONDS.fullmatch(value.strip()):
         return None
     return int(value.strip())
 

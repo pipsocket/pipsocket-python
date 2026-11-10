@@ -306,11 +306,11 @@ def local_api() -> Iterator[str]:
 def real_call(flavour: str, base_url: str) -> Any:
     spec = trade("place_order", "POST", ACCOUNT, "/orders", {"symbol": "EURUSD"}, KEY)
     if flavour == "sync":
-        ps = Pipsocket(API_KEY, base_url=base_url, max_retries=0)
+        ps = Pipsocket(API_KEY, base_url=base_url, timeout=2, max_retries=0)
         return ps._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
 
     async def run_async() -> Any:
-        async with AsyncPipsocket(API_KEY, base_url=base_url) as ps:
+        async with AsyncPipsocket(API_KEY, base_url=base_url, timeout=2, max_retries=0) as ps:
             return await ps._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
 
     return asyncio.run(run_async())
@@ -330,12 +330,14 @@ def test_a_real_transport_sends_the_body(flavour: str, local_api: str) -> None:
 def test_a_real_transport_that_cant_connect_sent_nothing(flavour: str) -> None:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]  # bound, not listening: connections are refused
+        port = probe.getsockname()[1]  # bound, not listening: refused (or, on macOS, timed out)
 
         with pytest.raises(APIConnectionError) as caught:
             real_call(flavour, f"http://127.0.0.1:{port}")
 
-    assert type(caught.value) is APIConnectionError
+    # A connection failure (APIConnectionError or its subclass APITimeoutError), never
+    # OutcomeUnknown: nothing was sent.
+    assert isinstance(caught.value, APIConnectionError)
     assert caught.value.idempotency_key == KEY
 
 
@@ -402,4 +404,36 @@ def test_a_hook_failure_after_a_bodyless_http2_trade_is_outcome_unknown(
     with pytest.raises(OutcomeUnknown) as caught:
         cancel_over_http2(flavour, hook)
 
+    assert caught.value.idempotency_key == KEY
+
+
+# Answers the parsers can't take are unreadable answers: maybe sent, retried with the same key.
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+@pytest.mark.parametrize("retry_after", ["\u00b2", "9" * 400, "-1", "1.5"])
+def test_an_unusable_retry_after_is_ignored(flavour: str, retry_after: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = b'{"error": "engine_timeout", "message": "Took too long."}'
+        headers = [(b"Retry-After", retry_after.encode())]  # as it came on the wire
+        return httpx.Response(504, headers=headers, content=body)
+
+    with pytest.raises(OutcomeUnknown) as caught:
+        through_shell(flavour, handler)
+
+    assert caught.value.idempotency_key == KEY
+    assert caught.value.status == 504
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_json_nested_too_deep_is_an_unreadable_answer(flavour: str) -> None:
+    deep = b"[" * 100_000 + b"0" + b"]" * 100_000
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=deep)
+
+    with pytest.raises(OutcomeUnknown) as caught:
+        through_shell(flavour, handler)
+
+    assert (caught.value.status, caught.value.raw) == (200, deep)
     assert caught.value.idempotency_key == KEY
