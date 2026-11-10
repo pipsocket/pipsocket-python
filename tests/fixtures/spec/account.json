@@ -1,0 +1,60 @@
+{
+  "200": {
+    "connected": {
+      "balance": 10000,
+      "company": "FBS Markets Inc.",
+      "connected": true,
+      "credit": 0,
+      "currency": "USD",
+      "equity": 10012.4,
+      "id": "acc_01m6tx3k9f2qw8r7bznd5yvh4c",
+      "kill_switch": {
+        "deviation": null,
+        "engaged": false,
+        "since": null
+      },
+      "leverage": 500,
+      "login": 5058427372,
+      "margin": 21.68,
+      "margin_free": 9990.72,
+      "margin_mode": "hedging",
+      "server": "FBS-Demo",
+      "server_time": 1794067825,
+      "status": "connected",
+      "trade_allowed": true,
+      "trade_mode": "demo"
+    }
+  },
+  "401": {
+    "invalid_api_key": {
+      "error": "invalid_api_key",
+      "message": "The API key is not valid."
+    },
+    "missing_api_key": {
+      "error": "missing_api_key",
+      "message": "Send your API key as Authorization: Bearer <key>."
+    }
+  },
+  "404": {
+    "no_such_account": {
+      "error": "no_such_account",
+      "message": "There is no such account."
+    }
+  },
+  "503": {
+    "engine_busy": {
+      "error": "engine_busy",
+      "message": "The engine has too many calls in flight; try again."
+    },
+    "engine_unavailable": {
+      "error": "engine_unavailable",
+      "message": "The account's engine is not connected."
+    }
+  },
+  "504": {
+    "engine_timeout": {
+      "error": "engine_timeout",
+      "message": "The account's engine did not answer in time."
+    }
+  }
+}

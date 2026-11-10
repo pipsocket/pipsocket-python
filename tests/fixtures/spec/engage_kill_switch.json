@@ -1,0 +1,108 @@
+{
+  "200": {
+    "flat": {
+      "cancelled": [],
+      "closed": [
+        {
+          "position": 881402311,
+          "request": {
+            "message": "The request was completed.",
+            "request": "req_9b1e4d7c2a5f8e0b3d6a9c12",
+            "result": {
+              "ask": 1.08412,
+              "bid": 1.0841,
+              "comment": "Request executed",
+              "deal": 771203498,
+              "order": 881402390,
+              "position": 0,
+              "price": 1.0841,
+              "retcode": 10009,
+              "retcode_external": 0,
+              "retcode_name": "TRADE_RETCODE_DONE",
+              "volume": 0.1
+            },
+            "sent": {
+              "action": "deal",
+              "comment": "kill switch",
+              "deviation": 20,
+              "expiration": 0,
+              "magic": 0,
+              "order": 0,
+              "position": 881402311,
+              "position_by": 0,
+              "price": 1.0841,
+              "sl": 0,
+              "stoplimit": 0,
+              "symbol": "EURUSD",
+              "tp": 0,
+              "type": "sell",
+              "type_filling": "ioc",
+              "type_time": "gtc",
+              "volume": 0.1
+            },
+            "state": "completed"
+          }
+        }
+      ],
+      "flat": true,
+      "kill_switch": {
+        "deviation": 20,
+        "engaged": true,
+        "since": 1794064225
+      },
+      "message": "The kill switch is engaged and the account has no positions or pending orders.",
+      "remaining": {
+        "orders": 0,
+        "positions": 0
+      },
+      "unanswered": []
+    }
+  },
+  "401": {
+    "invalid_api_key": {
+      "error": "invalid_api_key",
+      "message": "The API key is not valid."
+    },
+    "missing_api_key": {
+      "error": "missing_api_key",
+      "message": "Send your API key as Authorization: Bearer <key>."
+    }
+  },
+  "404": {
+    "no_such_account": {
+      "error": "no_such_account",
+      "message": "There is no such account."
+    }
+  },
+  "422": {
+    "invalid_request": {
+      "error": "invalid_request",
+      "message": "price is required for pending orders"
+    }
+  },
+  "503": {
+    "account_not_connected": {
+      "error": "account_not_connected",
+      "kill_switch": {
+        "deviation": 20,
+        "engaged": true,
+        "since": 1794064225
+      },
+      "message": "The kill switch is engaged, but the account's terminal did not answer, so nothing was closed. Engage it again once the terminal is connected."
+    },
+    "engine_busy": {
+      "error": "engine_busy",
+      "message": "The engine has too many calls in flight; try again."
+    },
+    "engine_unavailable": {
+      "error": "engine_unavailable",
+      "message": "The account's engine is not connected."
+    }
+  },
+  "504": {
+    "engine_timeout": {
+      "error": "engine_timeout",
+      "message": "The account's engine did not answer in time."
+    }
+  }
+}

@@ -1,0 +1,139 @@
+name: API document
+
+# Daily, or run by hand after a docs deploy: fetch the published OpenAPI document and, if it
+# differs from the snapshot, regenerate, run the tests and open a pull request either way.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spec
+  cancel-in-progress: false
+
+env:
+  BRANCH: spec/update
+  OTHER_REPO: pipsocket/pipsocket-node
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.14"
+      - run: uv sync --locked
+
+      - name: The other SDK's daily check is still on
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state="$(gh api "repos/$OTHER_REPO/actions/workflows/spec.yml" --jq .state 2>/dev/null || echo unreadable)"
+          echo "$OTHER_REPO spec.yml: $state"
+          title="The daily API document check in $OTHER_REPO is $state"
+          if [[ "$state" == disabled* ]] && [ -z "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
+            gh issue create --title "$title" --body "GitHub turns scheduled workflows off after 60 days without activity. Turn it back on with: gh workflow enable spec.yml -R $OTHER_REPO"
+          fi
+
+      - name: Fetch the published document
+        run: |
+          curl -sSfL -A "pipsocket-python-spec-check (+https://github.com/pipsocket/pipsocket-python)" \
+            https://docs.pipsocket.com/openapi.json -o "$RUNNER_TEMP/live.json"
+
+      - name: Compare
+        id: compare
+        run: |
+          if uv run python scripts/spec_diff.py openapi.json "$RUNNER_TEMP/live.json" --report "$RUNNER_TEMP/report.md"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: OpenAPI diff
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          curl -sSfL https://github.com/oasdiff/oasdiff/releases/download/v1.37.0/oasdiff_1.37.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/oasdiff.tar.gz"
+          echo "eac87307d31d08c36800c58a409c247f1c5db37fbb72e2544402f22a87cbca3c  $RUNNER_TEMP/oasdiff.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oasdiff.tar.gz" -C "$RUNNER_TEMP" oasdiff
+          # oasdiff 1.37 reports a value added to a response enum as an error by default, so a
+          # widened enum is shown for review rather than waved through as additive.
+          {
+            echo "### oasdiff changelog"
+            echo
+            "$RUNNER_TEMP/oasdiff" changelog openapi.json "$RUNNER_TEMP/live.json" --format markdown || true
+          } >> "$RUNNER_TEMP/report.md"
+
+      - name: Regenerate
+        id: generate
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          set -o pipefail
+          uv run python scripts/generate.py --snapshot "$RUNNER_TEMP/live.json" 2>&1 | tee "$RUNNER_TEMP/generate.log"
+
+      - name: The generator failed
+        if: failure() && steps.generate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Regenerating from the published API document failed."
+            echo
+            echo '```'
+            tail -n 100 "$RUNNER_TEMP/generate.log"
+            echo '```'
+          } > "$RUNNER_TEMP/issue.md"
+          gh issue create --title "Regenerating from the API document failed" --body-file "$RUNNER_TEMP/issue.md"
+
+      - name: Tests
+        id: tests
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          set +e
+          uv run pytest -q > "$RUNNER_TEMP/tests.log" 2>&1
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          {
+            echo
+            echo "### Tests"
+            echo
+            echo '```'
+            tail -n 60 "$RUNNER_TEMP/tests.log"
+            echo '```'
+          } >> "$RUNNER_TEMP/report.md"
+
+      - name: Open or update the pull request
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTS: ${{ steps.tests.outputs.status }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -A openapi.json src/pipsocket/_generated tests/fixtures/spec
+          git commit -m "Update the API document snapshot"
+          git push --force origin "$BRANCH"
+          if [ "$TESTS" = "0" ]; then result="pass"; else result="fail"; fi
+          title="API document changed (tests $result)"
+          {
+            echo "The published API document differs from the snapshot. Tests: **$result**."
+            echo
+            echo "A failing coverage test lists what the SDK still needs: a method for a new operation, or an exception and retry policy for a new error code."
+            echo
+            cat "$RUNNER_TEMP/report.md"
+          } > "$RUNNER_TEMP/body.md"
+          gh label create spec --color 0e8a16 --description "The API document changed" --force
+          existing="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --head "$BRANCH" --base main --title "$title" --body-file "$RUNNER_TEMP/body.md" --label spec
+          fi

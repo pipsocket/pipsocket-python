@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A question about your account, billing or a trade
+    url: mailto:support@pipsocket.com
+    about: Pipsocket's support answers these. Issues here are for bugs in this SDK.
+  - name: API documentation
+    url: https://docs.pipsocket.com
+    about: How the API itself works.

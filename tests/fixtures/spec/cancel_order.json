@@ -1,0 +1,261 @@
+{
+  "200": {
+    "done": {
+      "message": "The request was completed.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "ask": 1.08412,
+        "bid": 1.0841,
+        "comment": "Request executed",
+        "deal": 0,
+        "order": 881402377,
+        "position": 0,
+        "price": 0,
+        "retcode": 10009,
+        "retcode_external": 0,
+        "retcode_name": "TRADE_RETCODE_DONE",
+        "volume": 0
+      },
+      "sent": {
+        "action": "remove",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 881402377,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 0,
+        "stoplimit": 0,
+        "symbol": "",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "fok",
+        "type_time": "gtc",
+        "volume": 0
+      },
+      "state": "completed"
+    }
+  },
+  "202": {
+    "pending": {
+      "message": "No answer from the trade server yet. The order may still execute; it is not sent again.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": null,
+      "sent": {
+        "action": "remove",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 881402377,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 0,
+        "stoplimit": 0,
+        "symbol": "",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "fok",
+        "type_time": "gtc",
+        "volume": 0
+      },
+      "state": "pending"
+    },
+    "unknown": {
+      "message": "The trade server's answer has not arrived in time. Until its outcome is known it blocks conflicting trades on its symbol; it settles when the terminal reports the answer, when the account's records show it, or when the account's owner settles it after checking the broker.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": null,
+      "sent": {
+        "action": "remove",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 881402377,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 0,
+        "stoplimit": 0,
+        "symbol": "",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "fok",
+        "type_time": "gtc",
+        "volume": 0
+      },
+      "state": "unknown"
+    }
+  },
+  "401": {
+    "invalid_api_key": {
+      "error": "invalid_api_key",
+      "message": "The API key is not valid."
+    },
+    "missing_api_key": {
+      "error": "missing_api_key",
+      "message": "Send your API key as Authorization: Bearer <key>."
+    }
+  },
+  "404": {
+    "no_such_account": {
+      "error": "no_such_account",
+      "message": "There is no such account."
+    },
+    "no_such_order": {
+      "error": "no_such_order",
+      "message": "The account has no pending order with that ticket."
+    }
+  },
+  "409": {
+    "not_executed": {
+      "error": "not_executed",
+      "message": "The request did not execute: the account's terminal never passed it to MT5.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "error": "not_executed",
+        "message": "The account's terminal never passed the request to MT5: its send ledger has no entry for it, and it can no longer arrive."
+      },
+      "sent": {
+        "action": "remove",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 881402377,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 0,
+        "stoplimit": 0,
+        "symbol": "",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "fok",
+        "type_time": "gtc",
+        "volume": 0
+      },
+      "settlement": "evidence",
+      "state": "not_executed"
+    },
+    "symbol_busy": {
+      "blocking": [
+        {
+          "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+          "state": "pending"
+        }
+      ],
+      "error": "symbol_busy",
+      "message": "Nothing was sent: an earlier request on this symbol is still waiting for the trade server's answer. Try again in a second.",
+      "not_sent": true
+    }
+  },
+  "422": {
+    "invalid_request": {
+      "error": "invalid_request",
+      "message": "price is required for pending orders"
+    },
+    "trade_rejected": {
+      "error": "trade_rejected",
+      "message": "The request is invalid.",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "ask": 1.08412,
+        "bid": 1.0841,
+        "comment": "Invalid request",
+        "deal": 0,
+        "order": 0,
+        "position": 0,
+        "price": 0,
+        "retcode": 10013,
+        "retcode_external": 0,
+        "retcode_name": "TRADE_RETCODE_INVALID",
+        "volume": 0
+      },
+      "sent": {
+        "action": "remove",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 881402377,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 0,
+        "stoplimit": 0,
+        "symbol": "",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "fok",
+        "type_time": "gtc",
+        "volume": 0
+      },
+      "state": "rejected"
+    }
+  },
+  "503": {
+    "account_not_connected": {
+      "error": "account_not_connected",
+      "message": "The account's terminal is not connected."
+    },
+    "account_restarting": {
+      "error": "account_restarting",
+      "message": "The account's terminal is being replaced; nothing was sent. Try again in a minute."
+    },
+    "bridge_outdated": {
+      "error": "bridge_outdated",
+      "message": "The account's terminal runs bridge protocol v1; restart the account to update it."
+    },
+    "engine_busy": {
+      "error": "engine_busy",
+      "message": "The engine has too many calls in flight; try again."
+    },
+    "engine_unavailable": {
+      "error": "engine_unavailable",
+      "message": "The account's engine is not connected."
+    },
+    "not_sent": {
+      "error": "not_sent",
+      "message": "The account's terminal did not send the request: 1000 trading commands are waiting for the trade server",
+      "request": "req_5f0c2a9e41d7b3a8c6e2f190",
+      "result": {
+        "error": "busy",
+        "message": "The account's terminal did not send the request: 1000 trading commands are waiting for the trade server"
+      },
+      "sent": {
+        "action": "remove",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 881402377,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 0,
+        "stoplimit": 0,
+        "symbol": "",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "fok",
+        "type_time": "gtc",
+        "volume": 0
+      },
+      "state": "not_sent"
+    }
+  },
+  "504": {
+    "engine_timeout": {
+      "error": "engine_timeout",
+      "message": "The account's engine did not answer in time."
+    },
+    "terminal_timeout": {
+      "error": "terminal_timeout",
+      "message": "The account's terminal did not answer in time."
+    }
+  }
+}

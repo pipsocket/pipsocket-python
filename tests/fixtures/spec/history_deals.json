@@ -1,0 +1,100 @@
+{
+  "200": {
+    "deals": [
+      {
+        "comment": "",
+        "commission": -0.35,
+        "entry": "in",
+        "fee": 0,
+        "magic": 0,
+        "order": 881402311,
+        "position": 881402311,
+        "price": 1.08412,
+        "profit": 0,
+        "reason": "expert",
+        "swap": 0,
+        "symbol": "EURUSD",
+        "ticket": 771203455,
+        "time_msc": 1794067801211,
+        "type": "buy",
+        "volume": 0.1
+      },
+      {
+        "comment": "[sl 1.07900]",
+        "commission": -0.35,
+        "entry": "out",
+        "fee": 0,
+        "magic": 0,
+        "order": 881402390,
+        "position": 881402311,
+        "price": 1.079,
+        "profit": -51.2,
+        "reason": "sl",
+        "swap": 0,
+        "symbol": "EURUSD",
+        "ticket": 771203498,
+        "time_msc": 1794071102540,
+        "type": "sell",
+        "volume": 0.1
+      }
+    ]
+  },
+  "401": {
+    "invalid_api_key": {
+      "error": "invalid_api_key",
+      "message": "The API key is not valid."
+    },
+    "missing_api_key": {
+      "error": "missing_api_key",
+      "message": "Send your API key as Authorization: Bearer <key>."
+    }
+  },
+  "404": {
+    "no_such_account": {
+      "error": "no_such_account",
+      "message": "There is no such account."
+    }
+  },
+  "422": {
+    "invalid_request": {
+      "error": "invalid_request",
+      "message": "price is required for pending orders"
+    },
+    "range_too_large": {
+      "error": "range_too_large",
+      "message": "The range holds more than one answer can carry; ask for a shorter range."
+    }
+  },
+  "503": {
+    "account_not_connected": {
+      "error": "account_not_connected",
+      "message": "The account's terminal is not connected."
+    },
+    "bad_command": {
+      "error": "bad_command",
+      "message": "deviation, expiration, tickets and magic must not be negative"
+    },
+    "engine_busy": {
+      "error": "engine_busy",
+      "message": "The engine has too many calls in flight; try again."
+    },
+    "engine_unavailable": {
+      "error": "engine_unavailable",
+      "message": "The account's engine is not connected."
+    },
+    "terminal_error": {
+      "error": "terminal_error",
+      "message": "The account's terminal did not answer about the symbol."
+    }
+  },
+  "504": {
+    "engine_timeout": {
+      "error": "engine_timeout",
+      "message": "The account's engine did not answer in time."
+    },
+    "terminal_timeout": {
+      "error": "terminal_timeout",
+      "message": "The account's terminal did not answer in time."
+    }
+  }
+}
