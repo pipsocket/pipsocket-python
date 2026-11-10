@@ -17,6 +17,7 @@ The rules, in short (the README has them for users):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import uuid
@@ -83,10 +84,11 @@ class Answer:
 
 @dataclass(frozen=True)
 class BodyLost:
-    """The status and headers arrived, then reading the body failed."""
+    """The status and headers arrived, then reading the body failed. `content` is what arrived."""
 
     status: int
     error: Exception
+    content: bytes
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,16 @@ class NoAnswer:
     timed_out: bool
 
 
-Attempt = Answer | BodyLost | NoAnswer
+@dataclass(frozen=True)
+class NotSent:
+    """The attempt failed before anything was sent, for a reason that isn't the network (the
+    HTTP client was closed, say). It isn't retried, and it is raised as it is unless an earlier
+    attempt may have reached the host."""
+
+    error: Exception
+
+
+Attempt = Answer | BodyLost | NoAnswer | NotSent
 
 
 class _Send:
@@ -347,9 +358,15 @@ class Verdict:
     status: int | None = None
     raw: bytes | None = None
     once_key: str | None = field(default=None)
+    # An exception that isn't the SDK's own, raised as it is when nothing may have been sent.
+    original: Exception | None = None
 
 
 def read_attempt(spec: Spec, attempt: Attempt) -> Verdict:
+    if isinstance(attempt, NotSent):
+        error = PipsocketError(f"The request could not be sent: {describe(attempt.error)}")
+        error.__cause__ = attempt.error
+        return Verdict(error=error, original=attempt.error)
     if isinstance(attempt, NoAnswer):
         kind = APITimeoutError if attempt.timed_out else APIConnectionError
         error = kind(f"No answer from the API: {describe(attempt.error)}")
@@ -360,7 +377,13 @@ def read_attempt(spec: Spec, attempt: Attempt) -> Verdict:
             f"The answer ({attempt.status}) was cut short: {describe(attempt.error)}"
         )
         error.__cause__ = attempt.error
-        return Verdict(error=error, retry="yes", maybe_sent=True, status=attempt.status)
+        return Verdict(
+            error=error,
+            retry="yes",
+            maybe_sent=True,
+            status=attempt.status,
+            raw=attempt.content,
+        )
     return read_answer(spec, attempt)
 
 
@@ -515,20 +538,45 @@ def drive(spec: Spec, settings: Settings) -> Generator[Step, Attempt | None, Any
             retried_once.add(verdict.once_key)
         if wait is not None and settings.clock() + wait > deadline:
             wait = None
-
         if wait is None:
-            if spec.kind is Kind.TRADE and maybe_sent:
-                assert spec.idempotency_key is not None
-                raise OutcomeUnknown(
-                    idempotency_key=spec.idempotency_key,
-                    cause=verdict.error,
-                    status=verdict.status,
-                    raw=verdict.raw,
-                ) from verdict.error
-            raise verdict.error
+            raise final_error(spec, verdict, maybe_sent)
 
         retries += 1
         yield Wait(wait)
+        # The wait may have run long: no new attempt starts after the deadline.
+        if settings.clock() > deadline:
+            raise final_error(spec, verdict, maybe_sent)
+
+
+def final_error(spec: Spec, verdict: Verdict, maybe_sent: bool) -> Exception:
+    """How a call ends without a value. On a trade call that may have reached the host, that is
+    OutcomeUnknown with the key; otherwise the last attempt's error, carrying the key too."""
+    assert verdict.error is not None
+    if spec.kind is Kind.TRADE and maybe_sent:
+        assert spec.idempotency_key is not None
+        unknown = OutcomeUnknown(
+            idempotency_key=spec.idempotency_key,
+            cause=verdict.error,
+            status=verdict.status,
+            raw=verdict.raw,
+        )
+        unknown.__cause__ = verdict.error
+        return unknown
+    error: Exception = verdict.original or verdict.error
+    if spec.kind is Kind.TRADE:
+        attach_key(error, spec.idempotency_key)
+    return error
+
+
+def attach_key(error: BaseException, key: str | None) -> None:
+    """Set the trade call's idempotency key on an error it raises, where the object can carry
+    one. On the SDK's own errors it is always there; on a cancellation or another library's
+    error it is a convenience only: the dependable way is a key made with new_key() and saved
+    before sending."""
+    if key is None:
+        return
+    with contextlib.suppress(AttributeError, TypeError):
+        error.idempotency_key = key  # type: ignore[attr-defined]
 
 
 def next_wait(verdict: Verdict, retries: int, settings: Settings) -> float | None:

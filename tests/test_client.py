@@ -263,3 +263,40 @@ def test_async_cancellation_passes_through_and_sends_nothing_more() -> None:
         assert len(sent) == 1
 
     asyncio.run(run())
+
+
+def test_a_wait_that_runs_past_the_deadline_starts_no_new_attempt() -> None:
+    clients = scripted(respond(503, {"error": "engine_unavailable", "message": "Away."}))
+    ps = Pipsocket(
+        API_KEY,
+        http_client=httpx.Client(transport=httpx.MockTransport(clients.transport.handle)),
+        _clock=clients.clock,
+        _sleep=lambda seconds: clients.clock.advance(61),
+    )
+
+    with pytest.raises(Unavailable):
+        ps.account(ACCOUNT).positions.list()
+
+    assert len(clients.transport.requests) == 1
+
+
+def test_redirects_are_not_followed() -> None:
+    moved = httpx.Response(307, headers={"Location": "https://elsewhere.example/v1"})
+    clients = scripted(moved, moved, moved)
+    http = httpx.Client(
+        transport=httpx.MockTransport(clients.transport.handle), follow_redirects=True
+    )
+    ps = Pipsocket(API_KEY, http_client=http, _clock=clients.clock, _sleep=clients.clock.sleep)
+
+    with pytest.raises(APIError):
+        ps.account(ACCOUNT).positions.list()
+
+    assert {request.url.host for request in clients.transport.requests} == {"api.pipsocket.com"}
+
+
+@pytest.mark.parametrize("key", ["psk_abc\n", "psk_abc def", " psk_abc", "psk_é"])
+def test_a_key_a_header_cant_carry_is_refused_without_echoing_it(key: str) -> None:
+    with pytest.raises(PipsocketError) as caught:
+        Pipsocket(key)
+
+    assert key.strip() not in str(caught.value)

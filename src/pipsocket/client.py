@@ -12,6 +12,7 @@ import httpx
 from ._core import (
     SEND,
     Attempt,
+    NotSent,
     Spec,
     Wait,
     account_path,
@@ -118,7 +119,13 @@ class _Requester:
         try:
             while True:
                 if step is SEND:
-                    step = run.send(self.attempt(spec, attempt_timeout))
+                    try:
+                        attempt = self.attempt(spec, attempt_timeout)
+                    except Exception as error:
+                        # Not the network (the client was closed, say): nothing was sent by
+                        # this attempt, but an earlier one may have been.
+                        attempt = NotSent(error)
+                    step = run.send(attempt)
                 else:
                     assert isinstance(step, Wait)
                     self.sleep(step.seconds)
@@ -131,16 +138,19 @@ class _Requester:
     def attempt(self, spec: Spec, timeout: float) -> Attempt:
         request = build_request(self.http, spec, self.options, timeout)
         try:
-            response = self.http.send(request, stream=True)
+            # Redirects would be sends the retry policy can't see: the API doesn't redirect.
+            response = self.http.send(request, stream=True, follow_redirects=False)
         except httpx.TransportError as error:
             return no_answer(error)
+        content = bytearray()
         try:
-            content = response.read()
+            for chunk in response.iter_bytes():
+                content += chunk
         except httpx.HTTPError as error:
-            return body_lost(response, error)
+            return body_lost(response, error, bytes(content))
         finally:
             response.close()
-        return answer(response, content)
+        return answer(response, bytes(content))
 
 
 class Account:

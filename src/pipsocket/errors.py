@@ -37,7 +37,13 @@ __all__ = [
 
 
 class PipsocketError(Exception):
-    """The base of every exception this SDK raises."""
+    """The base of every exception this SDK raises.
+
+    `idempotency_key` is set on every exception a trade call raises: call again with it to get
+    the recorded request, or send the trade if it never arrived. None on other calls.
+    """
+
+    idempotency_key: str | None = None
 
 
 class APIConnectionError(PipsocketError):
@@ -181,7 +187,7 @@ class OutcomeUnknown(PipsocketError):
     `cause` is the last error, `status` and `raw` the last answer's status and bytes, if any.
     """
 
-    idempotency_key: str
+    idempotency_key: str  # pyright: ignore[reportIncompatibleVariableOverride]
     cause: PipsocketError
     status: int | None
     raw: bytes | None
@@ -199,7 +205,7 @@ class OutcomeUnknown(PipsocketError):
             "Call again with the same idempotency_key to get it, or check positions and "
             f"history. Last error: {cause}"
         )
-        self.idempotency_key = idempotency_key
+        self.idempotency_key = idempotency_key  # pyright: ignore[reportIncompatibleVariableOverride]
         self.cause = cause
         self.status = status
         self.raw = raw

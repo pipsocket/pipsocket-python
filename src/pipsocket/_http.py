@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import random
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ DEFAULT_TIMEOUT = 40.0
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_DEADLINE = 60.0
 KEY_ENV = "PIPSOCKET_KEY"
+_KEY_CHARACTERS = re.compile(r"[\x21-\x7e]+")
 
 USER_AGENT = (
     f"pipsocket-python/{__version__} "
@@ -71,6 +73,9 @@ def options(
         raise PipsocketError(
             f"No API key: pass api_key=, or set the {KEY_ENV} environment variable."
         )
+    if not _KEY_CHARACTERS.fullmatch(key):
+        # Not echoed: an HTTP library refusing the header would put it in its error message.
+        raise PipsocketError("The API key has a space or a character a header can't carry.")
     return Options(
         api_key=key,
         base_url=(base_url or DEFAULT_BASE_URL).rstrip("/"),
@@ -130,5 +135,5 @@ def answer(response: httpx.Response, content: bytes) -> Answer:
     return Answer(status=response.status_code, headers=response.headers, content=content)
 
 
-def body_lost(response: httpx.Response, error: Exception) -> BodyLost:
-    return BodyLost(status=response.status_code, error=error)
+def body_lost(response: httpx.Response, error: Exception, content: bytes) -> BodyLost:
+    return BodyLost(status=response.status_code, error=error, content=content)
