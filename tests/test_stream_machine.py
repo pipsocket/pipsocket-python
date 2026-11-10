@@ -689,3 +689,16 @@ def test_never_subscribed_reconnects() -> None:
     driver.fire("subscribed")
 
     assert driver.state is core.State.BACKOFF
+
+
+def test_gaps_during_a_resync_dont_extend_its_deadline() -> None:
+    driver = Driver()
+    driver.answer_ticks(driver.subscribe())
+    deadline = driver.timers["resync_deadline"]
+
+    driver.message(type="lagged", missed=1)
+    driver.feed(core.Overflowed())
+
+    assert driver.timers["resync_deadline"] == deadline
+    driver.feed(core.Timer("resync_deadline", deadline.generation))
+    assert driver.state is core.State.BACKOFF

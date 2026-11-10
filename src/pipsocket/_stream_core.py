@@ -573,17 +573,21 @@ class StreamMachine:
     # Resync.
 
     def begin_resync(self, reason: Reason, *, send_ticks: bool) -> None:
-        if self.state is State.SYNCING and self.resync is not None:
+        restarting = self.state is State.SYNCING and self.resync is not None
+        if restarting and self.resync is not None:
             # A gap during a resync: start again, so the snapshot is read after it. A new
-            # socket's resync keeps its reason, and its ticks if they aren't set yet.
+            # socket's resync keeps its reason, and its ticks if they aren't set yet. The 120 s
+            # deadline still counts from the first start, so gaps can't keep it syncing.
             send_ticks = send_ticks or self.resync.send_ticks or self.resync.ticks_call is not None
             if self.resync.reason in ("connected", "reconnected"):
                 reason = self.resync.reason
-        self.abandon_resync()
+            self.bump("resync_retry")
+        else:
+            self.abandon_resync()
+            self.start_timer("resync_deadline", RESYNC_WITHIN)
         self.state = State.SYNCING
         self.read_generation += 1
         self.resync = Resync(reason, self.read_generation, send_ticks and bool(self.ticks))
-        self.start_timer("resync_deadline", RESYNC_WITHIN)
         self.begin_resync_reads()
 
     def abandon_resync(self) -> None:
