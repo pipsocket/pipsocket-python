@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from types import TracebackType
 from typing import Any, cast
@@ -12,7 +13,7 @@ import httpx
 from ._core import (
     SEND,
     Attempt,
-    NotSent,
+    Failed,
     Spec,
     Wait,
     account_path,
@@ -123,13 +124,7 @@ class _Requester:
         try:
             while True:
                 if step is SEND:
-                    try:
-                        attempt = await self.attempt(spec, attempt_timeout)
-                    except Exception as error:
-                        # Not the network (the client was closed, say): nothing was sent by
-                        # this attempt, but an earlier one may have been.
-                        attempt = NotSent(error)
-                    step = run.send(attempt)
+                    step = run.send(await self.attempt(spec, attempt_timeout))
                 else:
                     assert isinstance(step, Wait)
                     await self.sleep(step.seconds)
@@ -140,20 +135,33 @@ class _Requester:
             run.close()
 
     async def attempt(self, spec: Spec, timeout: float) -> Attempt:
-        request = build_request(self.http, spec, self.options, timeout)
+        """One attempt, and what it came to. A failure is placed by when it happened: before
+        sending (nothing sent), or once sending began (it may have reached the host)."""
+        if self.http.is_closed:
+            return Failed(RuntimeError("The HTTP client has been closed."), maybe_sent=False)
+        try:
+            request = build_request(self.http, spec, self.options, timeout)
+        except Exception as error:
+            return Failed(error, maybe_sent=False)
         try:
             # Redirects would be sends the retry policy can't see: the API doesn't redirect.
             response = await self.http.send(request, stream=True, follow_redirects=False)
         except httpx.TransportError as error:
             return no_answer(error)
+        except Exception as error:
+            return Failed(error, maybe_sent=True)
         content = bytearray()
         try:
             async for chunk in response.aiter_bytes():
                 content += chunk
         except httpx.HTTPError as error:
             return body_lost(response, error, bytes(content))
+        except Exception as error:
+            return Failed(error, maybe_sent=True)
         finally:
-            await response.aclose()
+            # A failure to clean up doesn't change what the attempt came to.
+            with contextlib.suppress(Exception):
+                await response.aclose()
         return answer(response, bytes(content))
 
 

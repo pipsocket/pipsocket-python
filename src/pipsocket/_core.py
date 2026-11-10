@@ -101,15 +101,16 @@ class NoAnswer:
 
 
 @dataclass(frozen=True)
-class NotSent:
-    """The attempt failed before anything was sent, for a reason that isn't the network (the
-    HTTP client was closed, say). It isn't retried, and it is raised as it is unless an earlier
-    attempt may have reached the host."""
+class Failed:
+    """The attempt failed for a reason that isn't the network or the API: the HTTP client was
+    closed, or another library raised. `maybe_sent` says whether sending had begun. It isn't
+    retried, and its error is raised as it is unless the call may have reached the host."""
 
     error: Exception
+    maybe_sent: bool
 
 
-Attempt = Answer | BodyLost | NoAnswer | NotSent
+Attempt = Answer | BodyLost | NoAnswer | Failed
 
 
 class _Send:
@@ -363,10 +364,10 @@ class Verdict:
 
 
 def read_attempt(spec: Spec, attempt: Attempt) -> Verdict:
-    if isinstance(attempt, NotSent):
-        error = PipsocketError(f"The request could not be sent: {describe(attempt.error)}")
+    if isinstance(attempt, Failed):
+        error = PipsocketError(f"The attempt failed: {describe(attempt.error)}")
         error.__cause__ = attempt.error
-        return Verdict(error=error, original=attempt.error)
+        return Verdict(error=error, maybe_sent=attempt.maybe_sent, original=attempt.error)
     if isinstance(attempt, NoAnswer):
         kind = APITimeoutError if attempt.timed_out else APIConnectionError
         error = kind(f"No answer from the API: {describe(attempt.error)}")
