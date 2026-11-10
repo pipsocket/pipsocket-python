@@ -1,0 +1,92 @@
+{
+  "200": {
+    "passed": {
+      "message": "The request passed the check.",
+      "result": {
+        "balance": 10000,
+        "comment": "Done",
+        "equity": 10000,
+        "margin": 108.41,
+        "margin_free": 9891.59,
+        "margin_level": 9224.24,
+        "passed": true,
+        "profit": 0,
+        "retcode": 0,
+        "retcode_name": "OK"
+      },
+      "sent": {
+        "action": "deal",
+        "comment": "",
+        "deviation": 0,
+        "expiration": 0,
+        "magic": 0,
+        "order": 0,
+        "position": 0,
+        "position_by": 0,
+        "price": 0,
+        "sl": 1.079,
+        "stoplimit": 0,
+        "symbol": "EURUSD",
+        "tp": 0,
+        "type": "buy",
+        "type_filling": "ioc",
+        "type_time": "gtc",
+        "volume": 0.1
+      }
+    }
+  },
+  "401": {
+    "invalid_api_key": {
+      "error": "invalid_api_key",
+      "message": "The API key is not valid."
+    },
+    "missing_api_key": {
+      "error": "missing_api_key",
+      "message": "Send your API key as Authorization: Bearer <key>."
+    }
+  },
+  "404": {
+    "no_such_account": {
+      "error": "no_such_account",
+      "message": "There is no such account."
+    }
+  },
+  "422": {
+    "invalid_request": {
+      "error": "invalid_request",
+      "message": "price is required for pending orders"
+    }
+  },
+  "503": {
+    "account_not_connected": {
+      "error": "account_not_connected",
+      "message": "The account's terminal is not connected."
+    },
+    "bad_command": {
+      "error": "bad_command",
+      "message": "deviation, expiration, tickets and magic must not be negative"
+    },
+    "bridge_outdated": {
+      "error": "bridge_outdated",
+      "message": "The account's terminal runs bridge protocol v1; restart the account to update it."
+    },
+    "engine_busy": {
+      "error": "engine_busy",
+      "message": "The engine has too many calls in flight; try again."
+    },
+    "engine_unavailable": {
+      "error": "engine_unavailable",
+      "message": "The account's engine is not connected."
+    }
+  },
+  "504": {
+    "engine_timeout": {
+      "error": "engine_timeout",
+      "message": "The account's engine did not answer in time."
+    },
+    "terminal_timeout": {
+      "error": "terminal_timeout",
+      "message": "The account's terminal did not answer in time."
+    }
+  }
+}

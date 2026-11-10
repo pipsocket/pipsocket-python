@@ -1,0 +1,26 @@
+name: Bug in the SDK
+description: Something in this Python SDK doesn't work as documented.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste an API key, a real account id, a login or a balance here. Questions about your account go to support@pipsocket.com.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Code that shows it
+      description: The smallest snippet you can, with the key and account left out.
+      render: python
+  - type: input
+    id: version
+    attributes:
+      label: pipsocket and Python versions
+      placeholder: pipsocket 0.1.0a1, Python 3.12, Linux
+    validations:
+      required: true

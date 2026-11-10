@@ -1,0 +1,46 @@
+{
+  "200": {
+    "engaged": {
+      "deviation": 20,
+      "engaged": true,
+      "since": 1794064225
+    },
+    "lifted": {
+      "deviation": null,
+      "engaged": false,
+      "since": null
+    }
+  },
+  "401": {
+    "invalid_api_key": {
+      "error": "invalid_api_key",
+      "message": "The API key is not valid."
+    },
+    "missing_api_key": {
+      "error": "missing_api_key",
+      "message": "Send your API key as Authorization: Bearer <key>."
+    }
+  },
+  "404": {
+    "no_such_account": {
+      "error": "no_such_account",
+      "message": "There is no such account."
+    }
+  },
+  "503": {
+    "engine_busy": {
+      "error": "engine_busy",
+      "message": "The engine has too many calls in flight; try again."
+    },
+    "engine_unavailable": {
+      "error": "engine_unavailable",
+      "message": "The account's engine is not connected."
+    }
+  },
+  "504": {
+    "engine_timeout": {
+      "error": "engine_timeout",
+      "message": "The account's engine did not answer in time."
+    }
+  }
+}
