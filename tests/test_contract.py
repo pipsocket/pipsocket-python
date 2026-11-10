@@ -2,7 +2,9 @@
 
 - The generated code matches the committed snapshot.
 - Every operation has an SDK method, which sends that operation's method and path, and handles
-  every response example the document gives for it.
+  every response example the document gives for it: a recorded request is returned on a trade
+  call whatever its status, and a refusal raises its exception (or OutcomeUnknown when it says
+  the trade may have reached the host).
 - Every error code has an exception and a retry policy for each kind of call.
 - Every request state is either final or outstanding.
 """
@@ -21,7 +23,7 @@ from typing import Any
 import httpx
 import pytest
 
-from pipsocket import APIError, TradeRequest
+from pipsocket import APIError, OutcomeUnknown, PipsocketError, TradeRequest
 from pipsocket._core import SAFE_POLICY, TRADE_POLICY
 from pipsocket._generated.operations import OPERATIONS
 from pipsocket._generated.tables import ERROR_STATUS, REQUEST_STATES
@@ -57,20 +59,35 @@ CALLS: dict[str, tuple[Call, str]] = {
         "/history/orders?from=1794009600&to=1794095999",
     ),
     "kill_switch": (lambda a: a.kill_switch.get(), "/kill-switch"),
+    "place_order": (
+        lambda a: a.orders.place(symbol="EURUSD", type="buy", volume=0.1, type_filling="ioc"),
+        "/orders",
+    ),
+    "check_order": (
+        lambda a: a.orders.check(symbol="EURUSD", type="buy", volume=0.1, type_filling="ioc"),
+        "/orders/check",
+    ),
+    "modify_order": (
+        lambda a: a.orders.modify(ORDER, price=1.074, sl=1.069, tp=1.09, type_time="gtc"),
+        f"/orders/{ORDER}",
+    ),
+    "cancel_order": (lambda a: a.orders.cancel(ORDER), f"/orders/{ORDER}"),
+    "set_position_levels": (
+        lambda a: a.positions.set_levels(POSITION, sl=1.079, tp=1.09),
+        f"/positions/{POSITION}",
+    ),
+    "close_position": (
+        lambda a: a.positions.close(POSITION, volume=0.1, type_filling="ioc"),
+        f"/positions/{POSITION}/close",
+    ),
+    "close_by": (
+        lambda a: a.positions.close_by(POSITION, position_by=881402350),
+        f"/positions/{POSITION}/close-by",
+    ),
+    "engage_kill_switch": (lambda a: a.kill_switch.engage(deviation=20), "/kill-switch"),
+    "lift_kill_switch": (lambda a: a.kill_switch.lift(), "/kill-switch"),
 }
 
-# The trade calls, check and the kill switch's writes arrive in the next milestone.
-NOT_YET = {
-    "place_order",
-    "check_order",
-    "modify_order",
-    "cancel_order",
-    "set_position_levels",
-    "close_position",
-    "close_by",
-    "engage_kill_switch",
-    "lift_kill_switch",
-}
 
 # The exception each refusal raises on a call that is safe to repeat, as the SDK's contract
 # names them (independently of the SDK's own table).
@@ -113,15 +130,12 @@ def test_generated_code_is_fresh() -> None:
 
 
 def test_every_operation_has_a_method() -> None:
-    assert not set(CALLS) & NOT_YET
-    assert set(CALLS) | NOT_YET == {op.id for op in OPERATIONS}
+    assert set(CALLS) == {op.id for op in OPERATIONS}
 
 
 def examples() -> list[Any]:
     found: list[Any] = []
     for operation in OPERATIONS:
-        if operation.id not in CALLS:
-            continue
         by_status = json.loads((FIXTURES / f"{operation.id}.json").read_text())
         for status, named in by_status.items():
             for name, body in named.items():
@@ -147,13 +161,29 @@ def test_every_documented_answer(operation: Any, status: int, body: Any, flavour
         else:
             account = clients.asyncio(max_retries=0).account(ACCOUNT)
             outcome = asyncio.run(awaited(call(account)))
-    except APIError as error:
+    except PipsocketError as error:
         raised = error
 
     (request,) = clients.transport.requests
     assert request.method == operation.method
     assert str(request.url) == f"{BASE_URL}/v1/accounts/{ACCOUNT}{path}"
 
+    if operation.keyed:
+        key = request.headers["Idempotency-Key"]
+        if "request" in body:
+            assert raised is None, "a recorded request is returned, whatever its status"
+            assert isinstance(outcome, TradeRequest)
+            assert (outcome.raw, outcome.http_status, outcome.idempotency_key) == (
+                body,
+                status,
+                key,
+            )
+        else:
+            assert raised is not None
+            check_trade_refusal(raised, status, body, key)
+        return
+
+    assert "Idempotency-Key" not in request.headers
     if 200 <= status < 300:
         assert raised is None
         if operation.id == "request":
@@ -165,13 +195,30 @@ def test_every_documented_answer(operation: Any, status: int, body: Any, flavour
     else:
         assert raised is not None
         assert type(raised).__name__ == SAFE_ERRORS[body["error"]]
+        assert isinstance(raised, APIError)
+        assert (raised.status, raised.code, raised.body) == (status, body["error"], body)
+
+
+def check_trade_refusal(raised: Exception, status: int, body: Any, key: str) -> None:
+    """A refusal on a trade call: its own error, or OutcomeUnknown when it may have been sent."""
+    code = body["error"]
+    if code in MAYBE_SENT:
+        assert isinstance(raised, OutcomeUnknown)
+        assert raised.idempotency_key == key
+        assert type(raised.cause) is APIError
         assert raised.status == status
-        assert raised.code == body["error"]
-        assert raised.body == body
+        return
+    assert type(raised).__name__ == SAFE_ERRORS[code]
+    assert isinstance(raised, APIError)
+    assert (raised.status, raised.code, raised.body) == (status, code, body)
 
 
 async def awaited(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value
+
+
+# On a trade call these say the trade may have reached the account's host.
+MAYBE_SENT = {"engine_unavailable", "engine_timeout"}
 
 
 def test_every_error_code_has_an_exception_and_a_policy() -> None:

@@ -3,6 +3,18 @@
 Each release names the API document snapshot it was built from (`openapi.json`, with the
 fingerprint `python scripts/spec_diff.py --fingerprint openapi.json` prints).
 
+## Unreleased
+
+### Added
+
+- The trade calls: `orders.place`, `orders.modify`, `orders.cancel`, `positions.close`,
+  `positions.close_by` and `positions.set_levels`. Each returns the recorded request as a
+  `TradeRequest` whatever its state, sends one idempotency key on every attempt, and raises
+  `OutcomeUnknown` (with the key) when the trade may have reached the host and no answer came back.
+- `idempotency_key=` on the trade calls, checked before sending.
+- `orders.check`, `kill_switch.engage` and `kill_switch.lift`.
+- `requests.wait(id, timeout=30)`: looks a request up until it is final or the time is up.
+
 ## 0.1.0a1
 
 The first alpha: the read calls.

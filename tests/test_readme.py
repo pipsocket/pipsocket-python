@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
@@ -35,25 +36,36 @@ def documented_answer(request: httpx.Request) -> httpx.Response:
     return httpx.Response(404, json={"error": "no_such_account", "message": "Not found."})
 
 
+class FakeAPI:
+    def __init__(self) -> None:
+        self.sent: list[httpx.Request] = []
+        # When set, every trade call's answer is lost after the request was written.
+        self.lose_trades = False
+
+
 @pytest.fixture
-def fake_api(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
-    sent: list[httpx.Request] = []
+def fake_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeAPI:
+    api = FakeAPI()
 
     def handle(_: object, request: httpx.Request) -> httpx.Response:
         assert request.url.host == "api.pipsocket.com"
         assert request.headers["Authorization"] == f"Bearer {API_KEY}"
-        sent.append(request)
+        api.sent.append(request)
         for _ in request.stream:  # type: ignore[union-attr]  (sent, as a real transport would)
             pass
+        if api.lose_trades and "Idempotency-Key" in request.headers:
+            raise httpx.ReadError("connection reset")
         return documented_answer(request)
 
     async def handle_async(_: object, request: httpx.Request) -> httpx.Response:
         return handle(_, request)
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PIPSOCKET_KEY", API_KEY)
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", handle_async)
-    return sent
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    return api
 
 
 def test_the_readme_has_examples() -> None:
@@ -61,9 +73,34 @@ def test_the_readme_has_examples() -> None:
 
 
 @pytest.mark.parametrize("source", EXAMPLES, ids=[f"example-{i}" for i in range(len(EXAMPLES))])
-def test_example_runs(source: str, fake_api: list[httpx.Request]) -> None:
+def test_example_runs(source: str, fake_api: FakeAPI) -> None:
     output = io.StringIO()
     with redirect_stdout(output):
         exec(compile(source, "README.md", "exec"), {"__name__": "__main__"})
-    assert fake_api, "the example made no call"
+    assert fake_api.sent, "the example made no call"
     assert output.getvalue(), "the example printed nothing"
+
+
+JOURNAL = next(example for example in EXAMPLES if "orders.jsonl" in example)
+
+
+def journal_after(fake_api: FakeAPI) -> list[dict[str, Any]]:
+    with redirect_stdout(io.StringIO()):
+        exec(compile(JOURNAL, "README.md", "exec"), {"__name__": "__main__"})
+    return [json.loads(line) for line in Path("orders.jsonl").read_text().splitlines()]
+
+
+def test_the_journal_example_resolves_a_settled_order(fake_api: FakeAPI) -> None:
+    opened, resolved = journal_after(fake_api)
+
+    assert resolved["key"] == opened["key"]
+    assert resolved["state"] == "completed"
+
+
+def test_the_journal_example_keeps_an_unknown_outcome_open(fake_api: FakeAPI) -> None:
+    fake_api.lose_trades = True
+
+    (opened,) = journal_after(fake_api)
+
+    keys = {request.headers["Idempotency-Key"] for request in fake_api.sent}
+    assert keys == {opened["key"]}
