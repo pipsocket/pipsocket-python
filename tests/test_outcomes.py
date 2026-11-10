@@ -764,3 +764,84 @@ def test_wait_with_no_time_waits_for_its_one_lookup() -> None:
     ps = pipsocket.Pipsocket(API_KEY, http_client=httpx.Client(transport=FakeTransport(handler)))
 
     assert ps.account(ACCOUNT).requests.wait(REQUEST_ID, timeout=0).state == "pending"
+
+
+# The request's headers went out, then the connection failed: the whole of a bodyless
+# request may have reached the host.
+
+
+class FailsAfterHeaders(httpx.BaseTransport, httpx.AsyncBaseTransport):
+    """Reports sending the headers (as httpcore does), then fails like a dropped connection.
+    After that, answers with `then`, if given."""
+
+    def __init__(self, then: list[httpx.Response] | None = None) -> None:
+        self.then = then or []
+        self.attempts = 0
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.attempts += 1
+        if self.attempts > 1 and self.then:
+            return self.then.pop(0)
+        request.extensions["trace"]("http11.send_request_headers.started", {})
+        raise httpx.ConnectError("connection dropped after the headers were sent")
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.attempts += 1
+        if self.attempts > 1 and self.then:
+            return self.then.pop(0)
+        await request.extensions["trace"]("http11.send_request_headers.started", {})
+        raise httpx.ConnectError("connection dropped after the headers were sent")
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+@pytest.mark.parametrize("then", ["nothing", "401"])
+def test_a_failure_after_the_headers_went_out_is_outcome_unknown(flavour: str, then: str) -> None:
+    answers = [respond(401, {"error": "invalid_api_key", "message": "x"})] if then == "401" else []
+    transport = FailsAfterHeaders(answers)
+    retries = 1 if answers else 0
+
+    if flavour == "sync":
+        ps = pipsocket.Pipsocket(
+            API_KEY, http_client=httpx.Client(transport=transport), max_retries=retries,
+            _sleep=lambda seconds: None,
+        )  # fmt: skip
+        with pytest.raises(OutcomeUnknown):
+            ps.account(ACCOUNT).orders.cancel(881402377)
+    else:
+
+        async def run() -> None:
+            async def no_sleep(seconds: float) -> None:
+                pass
+
+            http = httpx.AsyncClient(transport=transport)
+            ps = AsyncPipsocket(API_KEY, http_client=http, max_retries=retries, _sleep=no_sleep)
+            await ps.account(ACCOUNT).orders.cancel(881402377)
+
+        with pytest.raises(OutcomeUnknown):
+            asyncio.run(run())
+
+
+class StallsThenClosesSlowly(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        await asyncio.sleep(5)
+        yield b"{}"
+
+    async def aclose(self) -> None:
+        await asyncio.sleep(0.3)
+
+
+def test_wait_keeps_its_deadline_when_a_cancelled_lookup_cleans_up_slowly() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=StallsThenClosesSlowly())
+
+    async def run() -> float:
+        http = httpx.AsyncClient(transport=FakeTransport(handler))
+        ps = AsyncPipsocket(API_KEY, http_client=http)
+        started = time.monotonic()
+        with pytest.raises(pipsocket.APITimeoutError):
+            await ps.account(ACCOUNT).requests.wait(REQUEST_ID, timeout=0.1)
+        took = time.monotonic() - started
+        await asyncio.sleep(0.4)  # let the cancelled lookup wind down before the loop closes
+        return took
+
+    assert asyncio.run(run()) < 0.2

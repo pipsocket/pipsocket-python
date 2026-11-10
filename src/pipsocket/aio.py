@@ -184,18 +184,22 @@ class _Requester:
     async def look(self, spec: Spec, seconds: float) -> TradeRequest | PipsocketError:
         """One lookup for wait(), over within `seconds` all told: the HTTP timeout applies to
         each network operation, so a slow answer could otherwise run past wait()'s deadline.
-        A lookup that runs over is cancelled; it is only a read."""
+        A lookup that runs over is cancelled and left to wind down on its own (its cleanup may
+        be slow): it is only a read."""
         attempt_timeout = min(self.options.timeout, seconds)
         try:
-            lookup = self.call(spec, attempt_timeout, 0)
             if math.isinf(seconds):
-                return cast(TradeRequest, await lookup)
+                return cast(TradeRequest, await self.call(spec, attempt_timeout, 0))
+            looking = asyncio.ensure_future(self.call(spec, attempt_timeout, 0))
             try:
-                return cast(TradeRequest, await asyncio.wait_for(lookup, seconds))
-            except asyncio.TimeoutError:  # TimeoutError on 3.11 and later
-                raise APITimeoutError(
-                    "The lookup did not answer within wait()'s timeout."
-                ) from None
+                done, _ = await asyncio.wait({looking}, timeout=seconds)
+            except asyncio.CancelledError:
+                abandon(looking)
+                raise
+            if not done:
+                abandon(looking)
+                raise APITimeoutError("The lookup did not answer within wait()'s timeout.")
+            return cast(TradeRequest, looking.result())
         except PipsocketError as error:
             return error
 
@@ -568,3 +572,20 @@ ORDER_FIELDS = (
 def order_fields(arguments: dict[str, Any]) -> dict[str, Any]:
     """An order's body from a method's arguments: the API's field names, as they are."""
     return {name: arguments[name] for name in ORDER_FIELDS}
+
+
+# Lookups wait() stopped waiting for: cancelled but not awaited, since their cleanup may be
+# slow. Kept until they end, so they aren't collected while running, and their errors read.
+_abandoned: set[asyncio.Future[Any]] = set()
+
+
+def abandon(task: asyncio.Future[Any]) -> None:
+    task.cancel()
+    _abandoned.add(task)
+    task.add_done_callback(_ended)
+
+
+def _ended(task: asyncio.Future[Any]) -> None:
+    _abandoned.discard(task)
+    if not task.cancelled():
+        task.exception()
