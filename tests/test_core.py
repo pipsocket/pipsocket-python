@@ -1,8 +1,6 @@
-"""The core's rules for a trade call, driven directly and through the shells' requester
-until the trade methods exist.
-
-These pin what the shells can't show with a read: once maybe sent, always maybe sent, and the
-key on every error a trade call raises.
+"""The core's rules for a trade call, driven directly and through the shells' requester,
+including against a real HTTP server on this machine. tests/test_outcomes.py walks the same
+rules through the public trade methods.
 """
 
 from __future__ import annotations

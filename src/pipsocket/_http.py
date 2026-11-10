@@ -180,6 +180,12 @@ def watch_response(response: httpx.Response) -> ResponseBody:
     return body
 
 
+def check_wait(timeout: float) -> float:
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout < 0:  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise ValueError(f"timeout is a number of seconds, 0 or more, not {timeout!r}.")
+    return float(timeout)
+
+
 def build_request(
     client: httpx.Client | httpx.AsyncClient, spec: Spec, opts: Options, timeout: float
 ) -> tuple[httpx.Request, RequestBody]:

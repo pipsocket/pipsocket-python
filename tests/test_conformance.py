@@ -43,9 +43,6 @@ def load() -> tuple[Json, list[Json]]:
 
 SUITE, CASES = load()
 
-# The calls this milestone has. The others arrive with the trade calls.
-NOT_YET = {"place_order", "cancel_order", "check_order", "engage_kill_switch"}
-
 
 def resolve(value: Json) -> Json:
     if isinstance(value, dict) and set(cast(dict[str, Json], value)) == {"use"}:
@@ -73,8 +70,22 @@ def reply_for(attempt: Json) -> httpx.Response | Exception:
     )
 
 
+ORDER_ID = 881402377
+REQUEST_ID = "req_5f0c2a9e41d7b3a8c6e2f190"
+
+
 def sync_call(account: Account, case: Json) -> Any:
     call = case["call"]
+    key = case.get("idempotency_key")
+    body = SUITE["calls"][call].get("body", {})
+    if call == "place_order":
+        return account.orders.place(**body, idempotency_key=key)
+    if call == "cancel_order":
+        return account.orders.cancel(ORDER_ID, idempotency_key=key)
+    if call == "check_order":
+        return account.orders.check(**body)
+    if call == "engage_kill_switch":
+        return account.kill_switch.engage()
     if call == "list_positions":
         return account.positions.list()
     if call == "list_symbols":
@@ -84,12 +95,22 @@ def sync_call(account: Account, case: Json) -> Any:
     if call == "history_deals":
         return account.history.deals(1794009600, 1794095999)
     if call == "get_request":
-        return account.requests.get("req_5f0c2a9e41d7b3a8c6e2f190")
+        return account.requests.get(REQUEST_ID)
     raise NotImplementedError(call)
 
 
 async def async_call(account: AsyncAccount, case: Json) -> Any:
     call = case["call"]
+    key = case.get("idempotency_key")
+    body = SUITE["calls"][call].get("body", {})
+    if call == "place_order":
+        return await account.orders.place(**body, idempotency_key=key)
+    if call == "cancel_order":
+        return await account.orders.cancel(ORDER_ID, idempotency_key=key)
+    if call == "check_order":
+        return await account.orders.check(**body)
+    if call == "engage_kill_switch":
+        return await account.kill_switch.engage()
     if call == "list_positions":
         return await account.positions.list()
     if call == "list_symbols":
@@ -99,25 +120,16 @@ async def async_call(account: AsyncAccount, case: Json) -> Any:
     if call == "history_deals":
         return await account.history.deals(1794009600, 1794095999)
     if call == "get_request":
-        return await account.requests.get("req_5f0c2a9e41d7b3a8c6e2f190")
+        return await account.requests.get(REQUEST_ID)
     raise NotImplementedError(call)
 
 
 def params() -> list[Any]:
-    found: list[Any] = []
-    for case in CASES:
-        marks = []
-        if case["call"] in NOT_YET:
-            marks = [
-                pytest.mark.xfail(
-                    reason=f"{case['call']} arrives with the trade calls",
-                    raises=NotImplementedError,
-                    strict=True,
-                )
-            ]
-        for flavour in ("sync", "async"):
-            found.append(pytest.param(case, flavour, id=f"{case['id']}-{flavour}", marks=marks))
-    return found
+    return [
+        pytest.param(case, flavour, id=f"{case['id']}-{flavour}")
+        for case in CASES
+        for flavour in ("sync", "async")
+    ]
 
 
 @pytest.mark.parametrize(("case", "flavour"), params())

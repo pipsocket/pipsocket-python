@@ -1,0 +1,135 @@
+{
+  "format": 1,
+  "about": "More cases in the format of call-cases.json, for rules that file doesn't pin yet. See README.md beside this file.",
+  "calls": {},
+  "bodies": {},
+  "cases": [
+    {
+      "id": "t-place-terminal-timeout-exhausted",
+      "title": "504 terminal_timeout on placing an order isn't documented for that call, so nothing says it recorded nothing: maybe sent",
+      "call": "place_order",
+      "attempts": [
+        {"respond": {"status": 504, "body": {"error": "terminal_timeout", "message": "..."}}},
+        {"respond": {"status": 504, "body": {"error": "terminal_timeout", "message": "..."}}},
+        {"respond": {"status": 504, "body": {"error": "terminal_timeout", "message": "..."}}}
+      ],
+      "expect": {"raise": {"error": "OutcomeUnknown", "cause": "TerminalTimeout", "cause_code": "terminal_timeout"}, "attempts": 3}
+    },
+    {
+      "id": "t-lost-then-terminal-timeout",
+      "title": "a lost answer, then terminal_timeout on a cancel until retries run out: still OutcomeUnknown",
+      "call": "cancel_order",
+      "attempts": [
+        {"fail": "after_write"},
+        {"respond": {"status": 504, "body": {"error": "terminal_timeout", "message": "..."}}},
+        {"respond": {"status": 504, "body": {"error": "terminal_timeout", "message": "..."}}}
+      ],
+      "expect": {"raise": {"error": "OutcomeUnknown", "cause": "TerminalTimeout", "cause_code": "terminal_timeout"}, "attempts": 3}
+    },
+    {
+      "id": "t-terminal-code-on-a-trade",
+      "title": "a code the API only sends on reads (terminal_error) arriving on a trade call is treated as an unknown 5xx: maybe sent",
+      "call": "place_order",
+      "attempts": [
+        {"respond": {"status": 503, "body": {"error": "terminal_error", "message": "..."}}},
+        {"respond": {"status": 503, "body": {"error": "terminal_error", "message": "..."}}},
+        {"respond": {"status": 503, "body": {"error": "terminal_error", "message": "..."}}}
+      ],
+      "expect": {"raise": {"error": "OutcomeUnknown", "cause": "TerminalError", "cause_code": "terminal_error"}, "attempts": 3}
+    },
+    {
+      "id": "t-cut-short-exhausted",
+      "title": "a 200 whose body is cut short every time: OutcomeUnknown with the status",
+      "call": "place_order",
+      "attempts": [
+        {"respond": {"status": 200, "body_error": true}},
+        {"respond": {"status": 200, "body_error": true}},
+        {"respond": {"status": 200, "body_error": true}}
+      ],
+      "expect": {"raise": {"error": "OutcomeUnknown", "cause": "APIConnectionError", "status": 200}, "attempts": 3}
+    },
+    {
+      "id": "t-busy-then-lost-then-busy",
+      "title": "symbol_busy, a lost answer, then symbol_busy without Retry-After: once maybe sent, always maybe sent",
+      "call": "place_order",
+      "attempts": [
+        {"respond": {"status": 409, "headers": {"Retry-After": "1"}, "body": {"use": "symbol_busy"}}},
+        {"fail": "after_write"},
+        {"respond": {"status": 409, "body": {"use": "symbol_busy_unknown"}}}
+      ],
+      "expect": {"raise": {"error": "OutcomeUnknown", "cause": "SymbolBusy", "cause_code": "symbol_busy"}, "attempts": 3}
+    },
+    {
+      "id": "t-lost-then-400-no-body",
+      "title": "a lost answer, then 400 with no body: OutcomeUnknown",
+      "call": "cancel_order",
+      "attempts": [
+        {"fail": "after_write"},
+        {"respond": {"status": 400, "text": ""}}
+      ],
+      "expect": {"raise": {"error": "OutcomeUnknown", "cause": "InvalidRequest", "status": 400}, "attempts": 2}
+    },
+    {
+      "id": "t-lost-then-not-sent",
+      "title": "a lost answer, then the recorded request comes back not_sent: returned",
+      "call": "place_order",
+      "attempts": [
+        {"fail": "after_write"},
+        {"respond": {"status": 503, "body": {"use": "request_not_sent"}}}
+      ],
+      "expect": {"return": {"trade_request": {"state": "not_sent", "kind": "not_sent", "http_status": 503, "id": "req_5f0c2a9e41d7b3a8c6e2f190"}}, "attempts": 2}
+    },
+    {
+      "id": "t-retry-after-backoff-mix",
+      "title": "a Retry-After wait is used as it is, and the next wait without one is the second nominal wait",
+      "call": "place_order",
+      "attempts": [
+        {"respond": {"status": 409, "headers": {"Retry-After": "2"}, "body": {"use": "symbol_busy"}}},
+        {"respond": {"status": 503, "body": {"error": "engine_busy", "message": "..."}}},
+        {"respond": {"status": 200, "body": {"use": "request_completed"}}}
+      ],
+      "expect": {"return": {"trade_request": {"state": "completed", "kind": "completed", "http_status": 200, "id": "req_5f0c2a9e41d7b3a8c6e2f190"}}, "sleeps": [{"min": 2.0, "max": 2.0}, {"min": 0.5, "max": 1.0}], "attempts": 3}
+    },
+    {
+      "id": "r-cut-short-exhausted",
+      "title": "a read whose body is cut short every time raises APIConnectionError",
+      "call": "list_positions",
+      "attempts": [
+        {"respond": {"status": 200, "body_error": true}},
+        {"respond": {"status": 200, "body_error": true}},
+        {"respond": {"status": 200, "body_error": true}}
+      ],
+      "expect": {"raise": {"error": "APIConnectionError"}, "attempts": 3}
+    },
+    {
+      "id": "r-deadline-passed",
+      "title": "a read starts no new attempt after the retry deadline",
+      "call": "list_positions",
+      "attempts": [
+        {"respond": {"status": 503, "body": {"error": "engine_unavailable", "message": "..."}}, "elapsed": 61}
+      ],
+      "expect": {"raise": {"error": "Unavailable", "code": "engine_unavailable"}, "attempts": 1}
+    },
+    {
+      "id": "r-unknown-5xx-retried",
+      "title": "an unknown code on a 5xx is retried on a read, then raised as a plain APIError",
+      "call": "list_positions",
+      "attempts": [
+        {"respond": {"status": 503, "body": {"error": "brand_new_code", "message": "..."}}},
+        {"respond": {"status": 503, "body": {"error": "brand_new_code", "message": "..."}}},
+        {"respond": {"status": 503, "body": {"error": "brand_new_code", "message": "..."}}}
+      ],
+      "expect": {"raise": {"error": "APIError", "code": "brand_new_code", "status": 503}, "attempts": 3}
+    },
+    {
+      "id": "k-engage-busy-then-ok",
+      "title": "engaging the kill switch retries engine_busy",
+      "call": "engage_kill_switch",
+      "attempts": [
+        {"respond": {"status": 503, "body": {"error": "engine_busy", "message": "..."}}},
+        {"respond": {"status": 200, "body": {"use": "kill_switch_outcome"}}}
+      ],
+      "expect": {"return": {"json": {"use": "kill_switch_outcome"}}, "attempts": 2}
+    }
+  ]
+}

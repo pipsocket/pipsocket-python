@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import re
 import uuid
 from collections.abc import Callable, Generator, Mapping
@@ -33,7 +34,9 @@ from .errors import (
     APIConnectionError,
     APIError,
     APITimeoutError,
+    AuthenticationError,
     InvalidRequest,
+    NotFound,
     OutcomeUnknown,
     PipsocketError,
     SymbolBusy,
@@ -182,7 +185,7 @@ def segment(value: str) -> str:
     return quote(value, safe="")
 
 
-def ticket(value: int) -> str:
+def ticket_segment(value: int) -> str:
     """A ticket for a path: a whole number, 0 or more."""
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ValueError(f"A ticket is a whole number, 0 or more, not {value!r}.")
@@ -628,3 +631,64 @@ def next_wait(verdict: Verdict, retries: int, settings: Settings) -> float | Non
         return float(verdict.retry_after)
     nominal = min(FIRST_WAIT * 2 ** min(retries, 16), LONGEST_WAIT)
     return nominal * (0.5 + 0.5 * settings.random())
+
+
+# requests.wait(): polls the lookup until the request is final or the timeout passes.
+
+FIRST_POLL = 0.25
+POLL_GROWTH = 1.5
+LONGEST_POLL = 2.0
+
+
+@dataclass(frozen=True)
+class Look:
+    """Look the request up once, giving the attempt at most `seconds`."""
+
+    seconds: float
+
+
+WaitStep = Look | Wait
+
+
+def drive_wait(
+    timeout: float, clock: Callable[[], float]
+) -> Generator[WaitStep, TradeRequest | PipsocketError | None, TradeRequest]:
+    """Yields Look (send back the TradeRequest or the error the lookup raised) or Wait.
+
+    Ends with the request when it is final, or as it stands when the timeout passes. It never
+    raises for "still pending" and only ever looks up. A 401 or 404 is raised at once: those
+    won't change. Other failures (the host away, a timeout) are polled through; if no lookup
+    has answered by the timeout, the last failure is raised. No lookup starts after the
+    timeout, however long a wait between lookups ran, and none runs past it.
+    """
+    deadline = clock() + timeout
+    interval = FIRST_POLL
+    latest: TradeRequest | None = None
+    last_error: PipsocketError | None = None
+    # Each lookup gets only what is left of the timeout, so a short timeout may end with no
+    # answer at all. timeout=0 means "look once": that lookup gets the client's own timeout.
+    seconds = timeout if timeout > 0 else math.inf
+
+    while True:
+        outcome = yield Look(seconds)
+        if isinstance(outcome, TradeRequest):
+            latest = outcome
+            if outcome.final:
+                return outcome
+        else:
+            assert outcome is not None
+            if isinstance(outcome, (AuthenticationError, NotFound)):
+                raise outcome
+            last_error = outcome
+
+        left = deadline - clock()
+        if left > 0:
+            yield Wait(min(interval, left))
+            interval = min(interval * POLL_GROWTH, LONGEST_POLL)
+            left = deadline - clock()
+        if left <= 0:
+            if latest is not None:
+                return latest
+            assert last_error is not None
+            raise last_error
+        seconds = left

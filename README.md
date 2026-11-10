@@ -3,9 +3,7 @@
 Python client for the Pipsocket API: trade MetaTrader 5 accounts hosted by Pipsocket from Linux,
 macOS or Windows.
 
-> **Alpha.** This release has the read calls: the account, positions, pending orders, history,
-> symbols and prices, request lookups and the kill switch's state. Trade calls and the stream
-> helper follow in the next alphas.
+> **Alpha.** This release has every REST call. The stream helper follows in the next alpha.
 
 ## Why
 
@@ -28,7 +26,7 @@ Python 3.10 or later. Its dependency is [httpx](https://www.python-httpx.org).
 ## Quickstart
 
 Make your workspace's API key on the dashboard's **API key** page, where your accounts' ids are
-listed too, and put the key in `PIPSOCKET_KEY`.
+listed too, and put the key in `PIPSOCKET_KEY`. Use a demo account while you try things.
 
 ```python
 from pipsocket import Pipsocket
@@ -36,15 +34,24 @@ from pipsocket import Pipsocket
 ps = Pipsocket()  # reads PIPSOCKET_KEY
 acct = ps.account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
 
-account = acct.get()
-print(account["status"], account["balance"], account["currency"])
+print(acct.get()["balance"])
+eurusd = acct.symbols.get("EURUSD")  # filling_modes, volume_min, volume_step, ...
 
-for position in acct.positions.list():
-    print(position["ticket"], position["symbol"], position["type"], position["volume"])
+order = acct.orders.place(symbol="EURUSD", type="buy", volume=0.01, type_filling="ioc")
+if order.outstanding:  # pending or unknown: it may still execute
+    order = acct.requests.wait(order.id)
 
-eurusd = acct.symbols.get("EURUSD")
-print(eurusd["filling_modes"], eurusd["volume_min"])
-print(acct.symbols.tick("EURUSD")["bid"])
+match order.state:
+    case "completed":
+        print("filled:", order.result["deal"], "at", order.result["price"])
+        # On a hedging account the position's ticket is the order's.
+        position = order.result["position"] or order.result["order"]
+        closed = acct.positions.close(position, volume=0.01, type_filling="ioc")
+        print("closed:", closed.state)
+    case "rejected":
+        print("rejected:", order.retcode_name)
+    case _:
+        print(order.state, order.message)
 ```
 
 Answers are plain dicts, typed with `TypedDict`s from the API's OpenAPI document
@@ -66,10 +73,16 @@ print(len(deals), "deals,", profit)
 
 ## Order outcomes
 
-A trade is recorded as a request (`req_...`), and `acct.requests.get(id)` looks it up, whatever
-its state. It comes back as a `TradeRequest`: `id`, `state`, `sent`, `result`, `message`,
-`error`, `settlement` and the whole body as `raw`, plus `accepted`, `final`, `outstanding`,
-`retcode` and `retcode_name`.
+Each trade call (`orders.place`, `orders.modify`, `orders.cancel`, `positions.close`,
+`positions.close_by`, `positions.set_levels`) is one MT5 trade request, sent once and recorded as
+a request (`req_...`). The call returns that request as a `TradeRequest`, **whatever its state**:
+a rejection is a result, not an exception. `acct.requests.get(id)` looks one up, and
+`acct.requests.wait(id, timeout=30)` looks it up until it is final or the time is up, then
+returns it as it stands; it never raises for "still pending" and never sends anything.
+
+A `TradeRequest` has `id`, `state`, `sent`, `result`, `message`, `error`, `settlement`, the
+whole body as `raw`, the `idempotency_key` it was sent with and the `http_status`, plus
+`accepted`, `final`, `outstanding`, `retcode` and `retcode_name`.
 
 ```python
 from pipsocket import Pipsocket
@@ -99,43 +112,99 @@ match request.state:
 | `executed` | Was `unknown`, settled as executed by the account's owner. Final. |
 
 `raise_for_state()` raises `TradeNotAccepted` for `rejected`, `not_sent` and `not_executed`, for
-those who prefer exceptions. A state this SDK doesn't know yet comes through as its string,
+those who prefer exceptions. `orders.check(...)` is MT5's dry run of an order and sends nothing to
+the broker. A state this SDK doesn't know yet comes through as its string,
 neither accepted nor final. See [Errors and retcodes](https://docs.pipsocket.com/errors).
 
-## Errors and retries
+## Errors, retries and idempotency keys
 
-Every exception derives from `PipsocketError`. A refusal from the API is an `APIError` with
-`status`, `code` (the API's `error`), `message`, `body` and `raw`, and a subclass for each kind:
-`AuthenticationError`, `NotFound`, `InvalidRequest`, `RangeTooLarge`, `AccountUnavailable`,
-`EngineBusy`, `Unavailable`, `TerminalTimeout`, `TerminalError`, `NoPrice` and the rest. A
-network failure is an `APIConnectionError` (or `APITimeoutError`).
+An exception means there is no recorded request in hand. Every exception derives from
+`PipsocketError`. A refusal from the API is an `APIError` with `status`, `code` (the API's
+`error`), `message`, `body` and `raw`, and a subclass for each kind: `AuthenticationError`,
+`NotFound`, `InvalidRequest`, `SymbolBusy`, `KillSwitchEngaged`, `BillingHold`,
+`AccountUnavailable`, `EngineBusy`, `Unavailable`, `TerminalTimeout`, `TerminalError`, `NoPrice`
+and the rest. A network failure is an `APIConnectionError` (or `APITimeoutError`). None of
+these, raised from a trade call, means anything was sent, with one exception:
+
+**`OutcomeUnknown`** means the trade may have reached the account's host and no answer came
+back. It may have executed. It carries the `idempotency_key` the call sent and the last error as
+`cause`. Call again with the same key: you get the recorded request if there is one, and the
+trade is sent if it never arrived. Or read positions and history first.
+
+Every trade call sends an `Idempotency-Key`: a new one per call, the same one on every retry
+inside the call. Calls that fail in a way worth repeating (the host busy or away, a dropped
+connection, an answer that isn't the API's JSON, `symbol_busy` with `Retry-After`) are tried
+again, twice by default, waiting 0.5 s and then 1 s (or what `Retry-After` says), and no new
+attempt starts 60 seconds after the first: a market order sent minutes late is not what you
+asked for. Refusals that won't change, such as a bad key or `kill_switch_engaged`, are raised at
+once.
+
+To survive a crash or a cancellation, make the key yourself and save it before sending. After a
+restart, the same call with the same key returns the recorded request instead of trading again.
+Make a new key for every new trade, and never build one from the order's fields (such as
+"buy-eurusd"): the key is the whole match, so a second order with the same key returns the first
+one and sends nothing.
+
+A key protects a trade only while Pipsocket keeps its request: until 7 days after its outcome is
+known. After that the same key sends a new trade. So resolve a journal's open entries promptly,
+and never replay an old one blindly: check positions and history first.
 
 ```python
-from pipsocket import AccountUnavailable, NotFound, Pipsocket
+import json
+import pathlib
+
+import pipsocket
+from pipsocket import OutcomeUnknown, Pipsocket
 
 acct = Pipsocket().account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
+journal = pathlib.Path("orders.jsonl")
+
+
+def note(entry: dict[str, object]) -> None:
+    with journal.open("a") as file:
+        file.write(json.dumps(entry) + "\n")
+
+
+key = pipsocket.new_key()
+note({"key": key, "symbol": "EURUSD", "volume": 0.01})  # saved before it is sent
 
 try:
-    positions = acct.positions.list()
-except AccountUnavailable as error:
-    print("the terminal isn't running:", error.code)
-except NotFound:
-    print("no such account for this key")
+    order = acct.orders.place(
+        symbol="EURUSD", type="buy", volume=0.01, type_filling="ioc", idempotency_key=key
+    )
+except OutcomeUnknown as error:
+    # The entry stays open: after a restart, resolve it with the same key.
+    print("may have executed; call again with", error.idempotency_key)
 else:
-    print(len(positions), "open positions")
+    if order.final:
+        note({"key": key, "request": order.id, "state": order.state})  # resolved
+    else:
+        print("no outcome yet: wait for", order.id, "before closing the entry")
+    print(order.id, order.state)
 ```
 
-Calls that fail in a way worth repeating (the account's host busy or away, a timeout, a dropped
-connection, an answer that isn't the API's JSON) are tried again, twice by default, waiting 0.5 s
-and then 1 s (or what `Retry-After` says), and no new attempt starts 60 seconds after the first.
-Refusals that won't change, such as a bad key or a missing symbol, are raised at once.
+Timeouts and retries can be set on the client, or per call:
 
 ```python
 from pipsocket import Pipsocket
 
 ps = Pipsocket(timeout=20, max_retries=4, retry_deadline=30)  # timeout is per attempt
 acct = ps.account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
-print(acct.kill_switch.get(max_retries=0)["engaged"])  # or per call
+print(acct.kill_switch.get(max_retries=0)["engaged"])
+```
+
+The kill switch closes every position and cancels every pending order, and refuses new exposure
+until it is lifted. Engaging it again retries whatever is left:
+
+```python
+from pipsocket import AccountUnavailable, Pipsocket
+
+acct = Pipsocket().account("acc_01m6tx3k9f2qw8r7bznd5yvh4c")
+try:
+    outcome = acct.kill_switch.engage(deviation=20)
+    print("flat:", outcome["flat"])
+except AccountUnavailable as error:
+    print("engaged, but the terminal didn't answer:", error.kill_switch)
 ```
 
 ## Sync and async

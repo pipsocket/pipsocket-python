@@ -100,7 +100,7 @@ class CutShort(httpx.SyncByteStream, httpx.AsyncByteStream):
 
 
 # One scripted answer: an httpx.Response, an exception to raise, or a function of the request.
-Reply = httpx.Response | Exception | Callable[[httpx.Request], httpx.Response]
+Reply = httpx.Response | BaseException | Callable[[httpx.Request], httpx.Response]
 
 
 @dataclass
@@ -122,7 +122,7 @@ class Transport:
         if index < len(self.elapsed):
             self.clock.advance(self.elapsed[index])
         reply = self.replies[index]
-        if isinstance(reply, Exception):
+        if isinstance(reply, BaseException):
             raise reply
         if isinstance(reply, httpx.Response):
             return reply
