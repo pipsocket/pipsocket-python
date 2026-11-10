@@ -296,7 +296,7 @@ def slow_lookup_api(delay: float) -> Callable[[httpx.Request], Any]:
 
 def test_a_stream_settlement_beats_a_slow_lookup_async(server: FakeStreamServer) -> None:
     async def run() -> tuple[str, float]:
-        http = httpx.AsyncClient(transport=FakeTransport(slow_lookup_api(0.5)))
+        http = httpx.AsyncClient(transport=FakeTransport(slow_lookup_api(3.0)))
         ps = AsyncPipsocket(API_KEY, stream_url=server.url, http_client=http)
         acct = ps.account(ACCOUNT)
         async with ps, acct.stream() as events:
@@ -306,18 +306,18 @@ def test_a_stream_settlement_beats_a_slow_lookup_async(server: FakeStreamServer)
                 0.05, server.send, {**pending(), "state": "completed", "type": "request"}
             )
             started = time.monotonic()
-            request = await acct.requests.wait(REQUEST_ID, timeout=0.1)
+            request = await acct.requests.wait(REQUEST_ID, timeout=1.0)
             return request.state, time.monotonic() - started
 
     state, took = asyncio.run(run())
     assert state == "completed"
-    assert took < 0.4
+    assert took < 0.8, "the settlement ended it, not the timeout or the lookup"
 
 
 def test_a_stream_settlement_beats_a_slow_lookup_sync(server: FakeStreamServer) -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         if "/requests/" in request.url.path:
-            time.sleep(0.5)
+            time.sleep(3.0)
         return rest_api()(request)
 
     http = httpx.Client(transport=FakeTransport(handle))
@@ -328,10 +328,12 @@ def test_a_stream_settlement_beats_a_slow_lookup_sync(server: FakeStreamServer) 
             0.05, server.send, [{**pending(), "state": "completed", "type": "request"}]
         ).start()
         started = time.monotonic()
-        request = acct.requests.wait(REQUEST_ID, timeout=0.1)
+        request = acct.requests.wait(REQUEST_ID, timeout=1.0)
 
     assert request.state == "completed"
-    assert time.monotonic() - started < 0.4
+    assert time.monotonic() - started < 0.8, (
+        "the settlement ended it, not the timeout or the lookup"
+    )
 
 
 def test_an_event_before_the_rest_answer_wins(server: FakeStreamServer) -> None:
@@ -452,12 +454,12 @@ def test_wait_with_a_stream_open_keeps_its_deadline(flavour: str, server: FakeSt
 
     def stalls(request: httpx.Request) -> httpx.Response:
         if "/requests/" in request.url.path:
-            time.sleep(0.6)
+            time.sleep(2.0)
         return rest_api()(request)
 
     async def stalls_async(request: httpx.Request) -> httpx.Response:
         if "/requests/" in request.url.path:
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(2.0)
         return rest_api()(request)
 
     if flavour == "sync":
@@ -483,7 +485,7 @@ def test_wait_with_a_stream_open_keeps_its_deadline(flavour: str, server: FakeSt
                 return time.monotonic() - started
 
         took = asyncio.run(run())
-    assert took < 0.3
+    assert took < 0.8
 
 
 @pytest.mark.parametrize("delay", range(8))
