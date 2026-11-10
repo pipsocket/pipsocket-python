@@ -37,39 +37,54 @@ class FakeClock:
 
 
 class FakeTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
-    """Answers with `handler`, in the order a real transport works: a failure to connect
-    comes before the request is written; anything else after its body is read."""
+    """Answers with `handler`, in the order httpcore works and reporting the same `trace`
+    events: a failure to connect is reported as such before anything is sent; otherwise the
+    request's headers, then its body, are sent before the answer comes back."""
 
     def __init__(self, handler: Callable[[httpx.Request], Any]) -> None:
         self.handler = handler
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        trace = request.extensions.get("trace")
         try:
             response = self.handler(request)
         except (httpx.ConnectError, httpx.ConnectTimeout):
+            if trace is not None:
+                trace("connection.connect_tcp.failed", {})
             raise
         except BaseException:
-            for _ in request.stream:  # type: ignore[union-attr]
-                pass
+            self.send(request, trace)
             raise
-        for _ in request.stream:  # type: ignore[union-attr]
-            pass
+        self.send(request, trace)
         return response
 
+    def send(self, request: httpx.Request, trace: Any) -> None:
+        if trace is not None:
+            trace("http11.send_request_headers.started", {})
+        for _ in request.stream:  # type: ignore[union-attr]
+            pass
+
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        trace = request.extensions.get("trace")
         try:
             response = self.handler(request)
             if inspect.isawaitable(response):
                 response = await response
         except (httpx.ConnectError, httpx.ConnectTimeout):
+            if trace is not None:
+                await trace("connection.connect_tcp.failed", {})
             raise
         except BaseException:
-            async for _ in request.stream:  # type: ignore[union-attr]
-                pass
+            await self.asend(request, trace)
             raise
+        await self.asend(request, trace)
+        return response
+
+    async def asend(self, request: httpx.Request, trace: Any) -> None:
+        if trace is not None:
+            await trace("http11.send_request_headers.started", {})
         async for _ in request.stream:  # type: ignore[union-attr]
             pass
-        return response
 
 
 class CutShort(httpx.SyncByteStream, httpx.AsyncByteStream):

@@ -307,3 +307,9 @@ def test_a_key_a_header_cant_carry_is_refused_without_echoing_it(key: str) -> No
         Pipsocket(key)
 
     assert key.strip() not in str(caught.value)
+
+
+@pytest.mark.parametrize("url", ["api.pipsocket.com", "ftp://api.pipsocket.com"])
+def test_base_url_needs_http_or_https(url: str) -> None:
+    with pytest.raises(ValueError, match="base_url"):
+        Pipsocket(API_KEY, base_url=url)

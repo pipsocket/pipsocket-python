@@ -150,7 +150,9 @@ class _Requester:
         except httpx.TransportError as error:
             return no_answer(error, body)
         except Exception as error:
-            return Failed(error, maybe_sent=body.read_started)
+            # Not the transport's: a request or response hook, say. Response hooks run after
+            # the answer arrived, so it may have been sent.
+            return Failed(error, maybe_sent=True)
         received = watch_response(response)
         content = bytearray()
         try:

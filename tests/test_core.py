@@ -14,7 +14,10 @@ import threading
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, ClassVar
 
+import hpack
+import httpcore
 import httpx
+import hyperframe.frame
 import pytest
 
 from pipsocket import (
@@ -333,4 +336,70 @@ def test_a_real_transport_that_cant_connect_sent_nothing(flavour: str) -> None:
             real_call(flavour, f"http://127.0.0.1:{port}")
 
     assert type(caught.value) is APIConnectionError
+    assert caught.value.idempotency_key == KEY
+
+
+# HTTP/2, with httpcore's own HTTP/2 connection over its in-memory network backend: a request
+# without a body is sent as headers alone, so its body is never read.
+
+
+def http2_answer() -> list[bytes]:
+    headers = hpack.Encoder().encode([(b":status", b"200"), (b"content-type", b"application/json")])
+    return [
+        hyperframe.frame.SettingsFrame().serialize(),
+        hyperframe.frame.HeadersFrame(stream_id=1, data=headers, flags=["END_HEADERS"]).serialize(),
+        hyperframe.frame.DataFrame(stream_id=1, data=COMPLETED, flags=["END_STREAM"]).serialize(),
+    ]
+
+
+def cancel_over_http2(flavour: str, hook: Any) -> Any:
+    spec = trade("cancel_order", "DELETE", ACCOUNT, "/orders/881402377", None, KEY)
+    if flavour == "sync":
+        transport = httpx.HTTPTransport(http1=False, http2=True)
+        transport._pool = httpcore.ConnectionPool(  # pyright: ignore[reportPrivateUsage]
+            http1=False,
+            http2=True,
+            network_backend=httpcore.MockBackend(http2_answer(), http2=True),
+        )
+        http = httpx.Client(transport=transport, event_hooks={"response": [hook]})
+        ps = Pipsocket(API_KEY, base_url="http://api.example", http_client=http)
+        return ps._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
+
+    async def run_async() -> Any:
+        transport = httpx.AsyncHTTPTransport(http1=False, http2=True)
+        backend = httpcore.AsyncMockBackend(http2_answer(), http2=True)
+        transport._pool = httpcore.AsyncConnectionPool(  # pyright: ignore[reportPrivateUsage]
+            http1=False, http2=True, network_backend=backend
+        )
+        http = httpx.AsyncClient(transport=transport, event_hooks={"response": [_awaitable(hook)]})
+        ps = AsyncPipsocket(API_KEY, base_url="http://api.example", http_client=http)
+        return await ps._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
+
+    return asyncio.run(run_async())
+
+
+def check_http2(response: httpx.Response) -> None:
+    assert response.http_version == "HTTP/2"
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_bodyless_http2_trade_answers(flavour: str) -> None:
+    assert cancel_over_http2(flavour, check_http2).state == "completed"
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.ConnectError("a hook's request could not connect"), RuntimeError("a hook failed")],
+)
+def test_a_hook_failure_after_a_bodyless_http2_trade_is_outcome_unknown(
+    flavour: str, failure: Exception
+) -> None:
+    def hook(response: httpx.Response) -> None:
+        check_http2(response)
+        raise failure
+
+    with pytest.raises(OutcomeUnknown) as caught:
+        cancel_over_http2(flavour, hook)
+
     assert caught.value.idempotency_key == KEY

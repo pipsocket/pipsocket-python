@@ -9,6 +9,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -78,7 +79,7 @@ def options(
         raise PipsocketError("The API key has a space or a character a header can't carry.")
     return Options(
         api_key=key,
-        base_url=(base_url or DEFAULT_BASE_URL).rstrip("/"),
+        base_url=check_url("base_url", base_url or DEFAULT_BASE_URL, ("http://", "https://")),
         stream_url=(stream_url or DEFAULT_STREAM_URL).rstrip("/"),
         timeout=check_seconds("timeout", timeout),
         max_retries=check_retries(max_retries),
@@ -86,6 +87,12 @@ def options(
         clock=clock or time.monotonic,
         random=rand or random.random,
     )
+
+
+def check_url(name: str, url: str, schemes: tuple[str, ...]) -> str:
+    if not url.startswith(schemes):
+        raise ValueError(f"{name} starts with {' or '.join(schemes)}, not {url!r}.")
+    return url.rstrip("/")
 
 
 def check_retries(value: int) -> int:
@@ -101,22 +108,42 @@ def check_seconds(name: str, value: float) -> float:
 
 
 class RequestBody(httpx.SyncByteStream, httpx.AsyncByteStream):
-    """A request's body that records when the transport begins reading it, which is when
-    sending begins. Every transport reads it, an empty body included."""
+    """A request's body that records how far sending got: whether the transport began
+    sending the request (its headers, reported through httpcore's `trace` extension, or
+    reading this body), and whether connecting failed. HTTP/2 sends a request without a body
+    as headers alone, so the body may never be read: the headers are what counts."""
 
     def __init__(self, content: bytes) -> None:
         self.content = content
-        self.read_started = False
+        self.sending_began = False
+        self.connect_failed = False
 
     def __iter__(self) -> Iterator[bytes]:
-        self.read_started = True
+        self.sending_began = True
         if self.content:
             yield self.content
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        self.read_started = True
+        self.sending_began = True
         if self.content:
             yield self.content
+
+    def trace(self, event: str, info: dict[str, Any]) -> None:
+        if event.endswith((".send_request_headers.started", ".send_request_body.started")):
+            self.sending_began = True
+        elif event.endswith(_CONNECT_FAILED):
+            self.connect_failed = True
+
+    async def atrace(self, event: str, info: dict[str, Any]) -> None:
+        self.trace(event, info)
+
+
+# httpcore's trace events for a connection that could not be opened.
+_CONNECT_FAILED = (
+    "connection.connect_tcp.failed",
+    "connection.connect_unix_socket.failed",
+    "connection.start_tls.failed",
+)
 
 
 class ResponseBody(httpx.SyncByteStream, httpx.AsyncByteStream):
@@ -166,6 +193,8 @@ def build_request(
         headers["Content-Type"] = "application/json"
     if spec.idempotency_key is not None:
         headers["Idempotency-Key"] = spec.idempotency_key
+    body = RequestBody(spec.body or b"")
+    trace = body.atrace if isinstance(client, httpx.AsyncClient) else body.trace
     request = client.build_request(
         spec.method,
         opts.base_url + spec.path,
@@ -173,20 +202,21 @@ def build_request(
         content=spec.body,
         headers=headers,
         timeout=httpx.Timeout(timeout),
+        extensions={"trace": trace},
     )
-    body = RequestBody(spec.body or b"")
     request.stream = body
     return request, body
 
 
 def no_answer(error: httpx.TransportError, body: RequestBody) -> NoAnswer:
-    """A transport error. It proves nothing was written only when it is a connect-phase error
-    and the transport never began reading the request's body: httpx's transports open the
-    connection before they read it. An error after that (a response hook's own failure, say)
-    leaves the attempt maybe sent."""
+    """A transport error. It proves nothing was written only with positive evidence: a
+    connect-phase error, the transport reporting that connecting failed, and nothing of the
+    request sent (neither its headers nor its body). Anything else, a response hook's own
+    failure included, leaves the attempt maybe sent."""
+    never_sent = isinstance(error, _NOT_WRITTEN) and body.connect_failed and not body.sending_began
     return NoAnswer(
         error=error,
-        written=body.read_started or not isinstance(error, _NOT_WRITTEN),
+        written=not never_sent,
         timed_out=isinstance(error, httpx.TimeoutException),
     )
 
