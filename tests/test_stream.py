@@ -45,7 +45,7 @@ def rest_api(
         path = request.url.path.removeprefix(f"/v1/accounts/{ACCOUNT}")
         if path == "":
             return httpx.Response(200, json=ACCOUNT_VIEW)
-        if path in ("/positions", "/orders"):
+        if path in ("/positions", "/orders") or path.startswith("/history/"):
             return httpx.Response(200, json=[])
         if path == f"/requests/{REQUEST_ID}":
             return httpx.Response(200, json=lookups())
@@ -378,3 +378,64 @@ def test_an_async_wait_with_a_stream_open_times_out_cleanly(server: FakeStreamSe
             return (await acct.requests.wait(REQUEST_ID, timeout=0.6)).state
 
     assert asyncio.run(run()) == "pending"
+
+
+def test_a_settlement_seen_before_watching_is_given_at_once() -> None:
+    registry = Settled()
+    completed = {**pending(), "state": "completed", "type": "request"}
+    registry.saw(completed)
+    seen: list[Any] = []
+
+    registry.watch(REQUEST_ID, seen.append)
+
+    assert seen == [completed]
+
+
+def test_an_overflow_is_handled_before_the_next_input(server: FakeStreamServer) -> None:
+    acct = sync_client(server).account(ACCOUNT)
+
+    with acct.stream(queue_size=1) as events:
+        assert next(events)["reason"] == "connected"
+        server.send({"type": "account", "server_time": 500})
+        assert next(events)["server_time"] == 500
+        for server_time in (1000, 2000, 3000):
+            server.send({"type": "account", "server_time": server_time})
+        time.sleep(0.3)
+        resync = next(events)
+
+    assert (resync["type"], resync["reason"]) == ("resync", "overflow")
+    assert resync["history"]["from"] == 500 - 300, "read back from before the lost events"
+
+
+def test_a_401_from_a_lookup_the_stream_beat_still_stops_it(server: FakeStreamServer) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if "/requests/" in request.url.path:
+            time.sleep(0.3)
+            return httpx.Response(401, json={"error": "invalid_api_key", "message": "Rolled."})
+        return rest_api()(request)
+
+    http = httpx.Client(transport=httpx.MockTransport(handle))
+    acct = Pipsocket(API_KEY, stream_url=server.url, http_client=http).account(ACCOUNT)
+    with acct.stream() as events:
+        next(events)
+        threading.Timer(
+            0.05, server.send, [{**pending(), "state": "completed", "type": "request"}]
+        ).start()
+        assert acct.requests.wait(REQUEST_ID, timeout=5).state == "completed"
+        time.sleep(0.5)
+        assert next(events)["type"] == "request", "the settlement itself, delivered first"
+        with pytest.raises(AuthenticationError):
+            next(events)
+
+
+def test_an_async_wait_leaves_no_task_behind(server: FakeStreamServer) -> None:
+    async def run() -> list[str]:
+        ps = async_client(server)
+        acct = ps.account(ACCOUNT)
+        async with ps, acct.stream() as events:
+            await anext(events)
+            for _ in range(3):
+                await acct.requests.wait(REQUEST_ID, timeout=0.3)
+            return [repr(task) for task in asyncio.all_tasks() if "Event.wait" in repr(task)]
+
+    assert asyncio.run(run()) == []

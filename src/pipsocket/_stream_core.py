@@ -250,8 +250,7 @@ Action = Connect | Disconnect | Send | StartTimer | Read | Emit | Notify | Fail
 class Resync:
     reason: Reason
     generation: int
-    # A new socket: wait for its tick set to be acknowledged before reading.
-    needs_ticks: bool
+    # Waiting for the socket's latest requested tick set to be acknowledged before reading.
     waiting_ticks: bool = False
     account: Json | None = None
     positions: list[Json] | None = None
@@ -461,7 +460,7 @@ class StreamMachine:
                 self.bump("subscribed")
                 reason: Reason = "reconnected" if self.connected_before else "connected"
                 self.connected_before = True
-                self.begin_resync(reason, send_ticks=True)
+                self.begin_resync(reason)
             return
         if kind in ("response", "error") and body.get("id") == self.ticks_call:
             self.ticks_answered(body)
@@ -479,7 +478,7 @@ class StreamMachine:
         kind = body.get("type")
         if kind == "lagged":
             self.emit(body)
-            self.begin_resync("lagged", send_ticks=False)
+            self.begin_resync("lagged")
         elif kind == "engine_disconnected":
             self.emit(body)
             self.host_away()
@@ -487,12 +486,12 @@ class StreamMachine:
             self.deliver(body)
             if kind == "status" and self.terminal_away and body.get("status") == "connected":
                 # The last snapshot had no positions or orders: the terminal is back now.
-                self.begin_resync("host_back", send_ticks=False)
+                self.begin_resync("host_back")
 
     def during_resync(self, body: Json) -> None:
         kind = body.get("type")
         if kind == "lagged":
-            self.begin_resync("lagged", send_ticks=False)
+            self.begin_resync("lagged")
         elif kind == "engine_disconnected":
             self.host_away()
         else:
@@ -501,7 +500,7 @@ class StreamMachine:
     def host_back_with(self, body: Json) -> None:
         if body.get("type") not in EVENTS:
             return
-        self.begin_resync("host_back", send_ticks=False)
+        self.begin_resync("host_back")
         self.hold(body)
 
     def hold(self, body: Json) -> None:
@@ -532,16 +531,20 @@ class StreamMachine:
             return
         self.held.clear()
         self.newest_ticks.clear()
-        self.begin_resync("overflow", send_ticks=False)
+        self.begin_resync("overflow")
 
     def take_back(self, dropped: tuple[Json, ...]) -> None:
         """Events the caller never got don't count as delivered: the checkpoint goes back to
         before the first dropped account event, and dropped deals aren't remembered."""
         for body in dropped:
             if body.get("type") == "deal":
-                ticket = deal_ticket(body)
-                if ticket is not None and ticket in self.recent_deals:
-                    self.recent_deals.remove(ticket)
+                forget(self.recent_deals, deal_ticket(body))
+            elif body.get("type") == "resync" and isinstance(body.get("history"), dict):
+                history = cast(Json, body["history"])
+                for deal in history.get("deals", []):
+                    forget(self.recent_deals, deal_ticket(deal))
+                for order in history.get("orders", []):
+                    forget(self.recent_orders, order_ticket(order))
         dropped_ids = {id(body) for body in dropped if body.get("type") == "account"}
         while self.account_events and id(self.account_events[-1][0]) in dropped_ids:
             _, before = self.account_events.pop()
@@ -616,13 +619,12 @@ class StreamMachine:
 
     # Resync.
 
-    def begin_resync(self, reason: Reason, *, send_ticks: bool) -> None:
+    def begin_resync(self, reason: Reason) -> None:
         restarting = self.state is State.SYNCING and self.resync is not None
         if restarting and self.resync is not None:
             # A gap during a resync: start again, so the snapshot is read after it. A new
             # socket's resync keeps its reason, and its ticks if they aren't set yet. The 120 s
             # deadline still counts from the first start, so gaps can't keep it syncing.
-            send_ticks = send_ticks or self.resync.needs_ticks
             if self.resync.reason in ("connected", "reconnected"):
                 reason = self.resync.reason
             self.bump("resync_retry")
@@ -631,7 +633,7 @@ class StreamMachine:
             self.start_timer("resync_deadline", RESYNC_WITHIN)
         self.state = State.SYNCING
         self.read_generation += 1
-        self.resync = Resync(reason, self.read_generation, send_ticks)
+        self.resync = Resync(reason, self.read_generation)
         self.begin_resync_reads()
 
     def abandon_resync(self) -> None:
@@ -645,17 +647,17 @@ class StreamMachine:
         assert resync is not None
         self.read_generation += 1
         resync.generation = self.read_generation
-        if resync.needs_ticks:
-            self.send_ticks_if_due()
-            if not self.ticks_settled():
-                resync.waiting_ticks = True
-                return
+        # Every resync reads after the socket's latest tick set is acknowledged: on a new socket
+        # that is the set sent again, and a set asked for meanwhile waits its turn too.
+        self.send_ticks_if_due()
+        if not self.ticks_settled():
+            resync.waiting_ticks = True
+            return
         self.after_ticks()
 
     def after_ticks(self) -> None:
         resync = self.resync
         assert resync is not None
-        resync.needs_ticks = False
         if self.read_state:
             self.read(resync, Read("account", resync.generation))
         else:
@@ -667,6 +669,11 @@ class StreamMachine:
 
     def answered(self, answer: Answered) -> None:
         read = answer.read
+        if answer.error is not None and fatal(answer.error):
+            # The key was rolled or the account is gone: that holds whether or not this read's
+            # answer is still wanted.
+            self.fail(answer.error)
+            return
         if read == self.probe:
             self.probe = None
             if self.state is State.HOST_AWAY:
@@ -797,7 +804,7 @@ class StreamMachine:
         resync.waiting = None
         self.start_timer("resync_retry", self.backoff())
         # Start the next attempt from a clean slate; held events are kept.
-        self.resync = Resync(resync.reason, resync.generation, resync.needs_ticks)
+        self.resync = Resync(resync.reason, resync.generation)
 
     def finish_resync(self) -> None:
         resync = self.resync
@@ -869,7 +876,7 @@ class StreamMachine:
 
     def probe_answered(self, answer: Answered) -> None:
         if answer.error is None:
-            self.begin_resync("host_back", send_ticks=False)
+            self.begin_resync("host_back")
             return
         if fatal(answer.error):
             self.fail(answer.error)
@@ -883,6 +890,11 @@ def fatal(error: PipsocketError) -> bool:
     if isinstance(error, AuthenticationError):
         return True
     return isinstance(error, NotFound) and error.code == "no_such_account"
+
+
+def forget(remembered: deque[int], ticket: int | None) -> None:
+    if ticket is not None and ticket in remembered:
+        remembered.remove(ticket)
 
 
 def deal_ticket(body: Json) -> int | None:

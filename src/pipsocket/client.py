@@ -181,7 +181,7 @@ class _Requester:
         if known is not None:
             return TradeRequest(cast(RequestView, known))
         run = drive_wait(check_wait(timeout), self.options.clock)
-        seen = _Seen() if streams else None
+        seen = _Seen(lambda error: report(streams, error)) if streams else None
         undo = [watch(stream, request_id, seen.saw) for stream in list(streams)] if seen else []
         step = next(run)
         try:
@@ -255,9 +255,11 @@ class _Requester:
 class _Seen:
     """A request an open stream saw settle, for a wait()."""
 
-    def __init__(self) -> None:
+    def __init__(self, failed: Callable[[PipsocketError], None]) -> None:
         self.request: TradeRequest | None = None
         self.changed = threading.Condition()
+        # Told of a lookup's failure even when the stream won the race: a 401 stops it too.
+        self.failed = failed
 
     def saw(self, body: Any) -> None:
         request = TradeRequest(body)
@@ -284,6 +286,8 @@ class _Seen:
                 answer = lookup()
             except BaseException as error:
                 answer = error
+                if isinstance(error, PipsocketError):
+                    self.failed(error)
             with self.changed:
                 answers.append(answer)
                 self.changed.notify_all()

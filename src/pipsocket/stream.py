@@ -93,12 +93,17 @@ class Settled:
             return self.finals.get(request_id)
 
     def watch(self, request_id: str, watcher: Watcher) -> bool:
-        """Add a watcher. True if it is the first for this id."""
+        """Add a watcher, and give it at once a settlement already seen (registering and
+        reading the cache under one lock, so none slips between). True if it is the first
+        watcher for this id."""
         with self.lock:
             watchers = self.watchers.setdefault(request_id, set())
             first = not watchers
             watchers.add(watcher)
-            return first
+            known = self.finals.get(request_id)
+        if known is not None:
+            watcher(known)
+        return first
 
     def unwatch(self, request_id: str, watcher: Watcher) -> bool:
         """Remove a watcher. True if it was the last for this id."""
@@ -172,15 +177,18 @@ class Engine:
     async def run(self) -> None:
         self.feed(core.Start())
         try:
+            next_event: core.Input | None = None
             while not self.finished:
-                event = await self.inputs.get()
+                event = next_event or await self.inputs.get()
+                next_event = None
                 self.dropped = None
                 for action in self.machine.handle(event):
                     await self.do(action)
                 if self.dropped is not None:
-                    # The queue overflowed: the rest of this batch is dropped with it, so no
-                    # event reaches the caller ahead of the resync that replaces them.
-                    self.feed(core.Overflowed(tuple(self.dropped)))
+                    # The queue overflowed: the rest of this batch is dropped with it, and the
+                    # machine hears of it before any other input, so no event reaches the
+                    # caller (or moves the checkpoint) ahead of the resync that replaces them.
+                    next_event = core.Overflowed(tuple(self.dropped))
                 if isinstance(event, core.Close):
                     self.finish(None)
         finally:

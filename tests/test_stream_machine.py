@@ -842,3 +842,52 @@ def test_a_missing_request_reported_from_outside_doesnt_stop_it() -> None:
 
     assert driver.feed(core.Fatal(gone)) == []
     assert driver.state is core.State.LIVE
+
+
+def test_an_overflow_takes_back_the_history_of_a_dropped_resync() -> None:
+    driver = Driver()
+    driver.connect_live()
+    driver.message(type="account", server_time=1000)
+    event = history_after_reconnect(
+        driver, ACCOUNT, deals=[{"ticket": 71}], history_orders=[{"ticket": 81}]
+    )
+    assert event["history"]["deals"] == [{"ticket": 71}]
+
+    actions = driver.feed(core.Overflowed((event,)))
+    emitted = driver.emitted(
+        driver.snapshot(actions, deals=[{"ticket": 71}], history_orders=[{"ticket": 81}])
+    )
+
+    assert emitted[0]["history"]["deals"] == [{"ticket": 71}]
+    assert emitted[0]["history"]["orders"] == [{"ticket": 81}]
+
+
+def test_a_superseded_reads_401_still_stops_the_stream() -> None:
+    driver = Driver()
+    actions = driver.answer_ticks(driver.subscribe())
+    stale = driver.pending_read(actions)
+    driver.message(type="lagged", missed=1)  # that read is no longer wanted
+
+    actions = driver.feed(core.Answered(stale, error=rolled()))
+
+    assert driver.state is core.State.FAILED
+    assert isinstance(actions[-1], core.Fail)
+
+
+def test_ticks_must_be_acknowledged_even_across_the_host_going_away() -> None:
+    driver = Driver()
+    first = driver.ticks_call(driver.subscribe())  # unanswered
+    driver.message(type="engine_disconnected")
+    assert driver.feed(core.SetTicks(("XAUUSD",))) == [], "one call at a time"
+
+    actions = driver.message(type="account", server_time=5)  # the host is back
+    assert driver.state is core.State.SYNCING
+    assert not any(isinstance(a, core.Read) for a in actions)
+
+    actions = driver.message(type="response", id=first, status=200, body={"symbols": ["EURUSD"]})
+    second = json.loads(driver_send(actions))
+    assert not any(isinstance(a, core.Read) for a in actions)
+    actions = driver.message(
+        type="response", id=second["id"], status=200, body={"symbols": ["XAUUSD"]}
+    )
+    assert driver.pending_read(actions).kind == "account"

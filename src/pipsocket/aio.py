@@ -184,7 +184,7 @@ class _Requester:
         if known is not None:
             return TradeRequest(cast(RequestView, known))
         run = drive_wait(check_wait(timeout), self.options.clock)
-        seen = _Seen() if streams else None
+        seen = _Seen(lambda error: report(streams, error)) if streams else None
         undo = [watch(stream, request_id, seen.saw) for stream in list(streams)] if seen else []
         step = next(run)
         try:
@@ -258,9 +258,11 @@ class _Requester:
 class _Seen:
     """A request an open stream saw settle, for a wait()."""
 
-    def __init__(self) -> None:
+    def __init__(self, failed: Callable[[PipsocketError], None]) -> None:
         self.request: TradeRequest | None = None
         self.changed = asyncio.Event()
+        # Told of a lookup's failure even when the stream won the race: a 401 stops it too.
+        self.failed = failed
 
     def saw(self, body: Any) -> None:
         request = TradeRequest(body)
@@ -270,7 +272,11 @@ class _Seen:
 
     async def wait(self, seconds: float) -> TradeRequest | None:
         """Wait up to `seconds`, or until a stream sees the request settle."""
-        await asyncio.wait({asyncio.ensure_future(self.changed.wait())}, timeout=seconds)
+        settled = asyncio.ensure_future(self.changed.wait())
+        try:
+            await asyncio.wait({settled}, timeout=seconds)
+        finally:
+            await finish(settled)
         return self.request
 
     async def race(self, lookup: Awaitable[Any]) -> TradeRequest:
@@ -282,11 +288,23 @@ class _Seen:
         try:
             await asyncio.wait({looking, settled}, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            settled.cancel()
+            await finish(settled)
+            if self.request is not None or not looking.done():
+                await finish(looking)
         if self.request is not None:
-            looking.cancel()
             return self.request
-        return cast(TradeRequest, looking.result())
+        try:
+            return cast(TradeRequest, looking.result())
+        except PipsocketError as error:
+            self.failed(error)
+            raise
+
+
+async def finish(task: asyncio.Future[Any]) -> None:
+    """Cancel a task this wait owns, and wait for it, so none is left running."""
+    task.cancel()
+    with contextlib.suppress(BaseException):
+        await task
 
 
 def newest(request: TradeRequest, streams: list[Any], key: str | None) -> TradeRequest:
