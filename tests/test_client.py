@@ -20,7 +20,16 @@ from pipsocket import (
     Unavailable,
 )
 
-from .fakes import ACCOUNT, API_KEY, CutShort, answer_lost, connect_failed, respond, scripted
+from .fakes import (
+    ACCOUNT,
+    API_KEY,
+    CutShort,
+    FakeTransport,
+    answer_lost,
+    connect_failed,
+    respond,
+    scripted,
+)
 
 POSITIONS = [{"ticket": 881402311, "symbol": "EURUSD"}]
 
@@ -28,7 +37,7 @@ POSITIONS = [{"ticket": 881402311, "symbol": "EURUSD"}]
 def test_the_key_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PIPSOCKET_KEY", API_KEY)
     clients = scripted(respond(200, POSITIONS))
-    http = httpx.Client(transport=httpx.MockTransport(clients.transport.handle))
+    http = httpx.Client(transport=FakeTransport(clients.transport.handle))
 
     Pipsocket(http_client=http).account(ACCOUNT).positions.list()
 
@@ -220,7 +229,7 @@ def test_an_unknown_4xx_on_a_read_is_a_plain_api_error() -> None:
 
 def test_a_given_http_client_is_left_open() -> None:
     clients = scripted(respond(200, POSITIONS))
-    http = httpx.Client(transport=httpx.MockTransport(clients.transport.handle))
+    http = httpx.Client(transport=FakeTransport(clients.transport.handle))
 
     with Pipsocket(API_KEY, http_client=http):
         pass
@@ -246,7 +255,7 @@ def test_async_cancellation_passes_through_and_sends_nothing_more() -> None:
         raise AssertionError("not reached")
 
     async def run() -> None:
-        http = httpx.AsyncClient(transport=httpx.MockTransport(hang))
+        http = httpx.AsyncClient(transport=FakeTransport(hang))
         sleeps: list[float] = []
 
         async def sleep(seconds: float) -> None:
@@ -269,7 +278,7 @@ def test_a_wait_that_runs_past_the_deadline_starts_no_new_attempt() -> None:
     clients = scripted(respond(503, {"error": "engine_unavailable", "message": "Away."}))
     ps = Pipsocket(
         API_KEY,
-        http_client=httpx.Client(transport=httpx.MockTransport(clients.transport.handle)),
+        http_client=httpx.Client(transport=FakeTransport(clients.transport.handle)),
         _clock=clients.clock,
         _sleep=lambda seconds: clients.clock.advance(61),
     )
@@ -283,9 +292,7 @@ def test_a_wait_that_runs_past_the_deadline_starts_no_new_attempt() -> None:
 def test_redirects_are_not_followed() -> None:
     moved = httpx.Response(307, headers={"Location": "https://elsewhere.example/v1"})
     clients = scripted(moved, moved, moved)
-    http = httpx.Client(
-        transport=httpx.MockTransport(clients.transport.handle), follow_redirects=True
-    )
+    http = httpx.Client(transport=FakeTransport(clients.transport.handle), follow_redirects=True)
     ps = Pipsocket(API_KEY, http_client=http, _clock=clients.clock, _sleep=clients.clock.sleep)
 
     with pytest.raises(APIError):

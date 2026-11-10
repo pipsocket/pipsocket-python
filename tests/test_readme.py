@@ -43,7 +43,8 @@ def fake_api(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
         assert request.url.host == "api.pipsocket.com"
         assert request.headers["Authorization"] == f"Bearer {API_KEY}"
         sent.append(request)
-        request.read()
+        for _ in request.stream:  # type: ignore[union-attr]  (sent, as a real transport would)
+            pass
         return documented_answer(request)
 
     async def handle_async(_: object, request: httpx.Request) -> httpx.Response:

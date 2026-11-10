@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
@@ -33,6 +34,42 @@ class FakeClock:
 
     async def async_sleep(self, seconds: float) -> None:
         self.sleep(seconds)
+
+
+class FakeTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
+    """Answers with `handler`, in the order a real transport works: a failure to connect
+    comes before the request is written; anything else after its body is read."""
+
+    def __init__(self, handler: Callable[[httpx.Request], Any]) -> None:
+        self.handler = handler
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            response = self.handler(request)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise
+        except BaseException:
+            for _ in request.stream:  # type: ignore[union-attr]
+                pass
+            raise
+        for _ in request.stream:  # type: ignore[union-attr]
+            pass
+        return response
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            response = self.handler(request)
+            if inspect.isawaitable(response):
+                response = await response
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise
+        except BaseException:
+            async for _ in request.stream:  # type: ignore[union-attr]
+                pass
+            raise
+        async for _ in request.stream:  # type: ignore[union-attr]
+            pass
+        return response
 
 
 class CutShort(httpx.SyncByteStream, httpx.AsyncByteStream):
@@ -100,7 +137,7 @@ class Clients:
     random: Callable[[], float] = lambda: 0.5
 
     def sync(self, **options: Any) -> Pipsocket:
-        http = httpx.Client(transport=httpx.MockTransport(self.transport.handle))
+        http = httpx.Client(transport=FakeTransport(self.transport.handle))
         return Pipsocket(
             API_KEY,
             http_client=http,
@@ -111,7 +148,7 @@ class Clients:
         )
 
     def asyncio(self, **options: Any) -> AsyncPipsocket:
-        http = httpx.AsyncClient(transport=httpx.MockTransport(self.transport.handle))
+        http = httpx.AsyncClient(transport=FakeTransport(self.transport.handle))
         return AsyncPipsocket(
             API_KEY,
             http_client=http,

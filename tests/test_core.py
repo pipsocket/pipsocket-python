@@ -8,13 +8,22 @@ key on every error a trade call raises.
 from __future__ import annotations
 
 import asyncio
+import http.server
+import socket
+import threading
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
 
-from pipsocket import AsyncPipsocket, AuthenticationError, OutcomeUnknown, Pipsocket
+from pipsocket import (
+    APIConnectionError,
+    AsyncPipsocket,
+    AuthenticationError,
+    OutcomeUnknown,
+    Pipsocket,
+)
 from pipsocket._core import (
     SEND,
     Answer,
@@ -28,7 +37,7 @@ from pipsocket._core import (
     trade,
 )
 
-from .fakes import ACCOUNT, API_KEY, FakeClock
+from .fakes import ACCOUNT, API_KEY, FakeClock, FakeTransport
 
 KEY = "rebalance-0412"
 
@@ -138,7 +147,7 @@ def through_shell(flavour: str, handler: Any, hooks: dict[str, Any] | None = Non
     """Run a place_order spec through the sync or async shell, with no retries."""
     spec = trade("place_order", "POST", ACCOUNT, "/orders", {"symbol": "EURUSD"}, KEY)
     if flavour == "sync":
-        http = httpx.Client(transport=httpx.MockTransport(handler), event_hooks=hooks or {})
+        http = httpx.Client(transport=FakeTransport(handler), event_hooks=hooks or {})
         return Pipsocket(API_KEY, http_client=http)._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
 
     async def run_async() -> Any:
@@ -146,7 +155,7 @@ def through_shell(flavour: str, handler: Any, hooks: dict[str, Any] | None = Non
             name: [_awaitable(hook) for hook in hooks_for_name]
             for name, hooks_for_name in (hooks or {}).items()
         }
-        http = httpx.AsyncClient(transport=httpx.MockTransport(handler), event_hooks=async_hooks)
+        http = httpx.AsyncClient(transport=FakeTransport(handler), event_hooks=async_hooks)
         ps = AsyncPipsocket(API_KEY, http_client=http)
         return await ps._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
 
@@ -193,14 +202,14 @@ def test_a_closed_client_before_sending_raises_as_it_is(flavour: str) -> None:
 
     spec = trade("place_order", "POST", ACCOUNT, "/orders", {"symbol": "EURUSD"}, KEY)
     if flavour == "sync":
-        http = httpx.Client(transport=httpx.MockTransport(handler))
+        http = httpx.Client(transport=FakeTransport(handler))
         http.close()
         with pytest.raises(RuntimeError) as caught:
             Pipsocket(API_KEY, http_client=http)._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
     else:
 
         async def run_async() -> None:
-            http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            http = httpx.AsyncClient(transport=FakeTransport(handler))
             await http.aclose()
             await AsyncPipsocket(API_KEY, http_client=http)._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
 
@@ -211,9 +220,13 @@ def test_a_closed_client_before_sending_raises_as_it_is(flavour: str) -> None:
 
 
 @pytest.mark.parametrize("flavour", ["sync", "async"])
-def test_a_connect_error_from_a_response_hook_is_outcome_unknown(flavour: str) -> None:
+@pytest.mark.parametrize("tagged", [False, True], ids=["untagged", "tagged-with-our-request"])
+def test_a_connect_error_from_a_response_hook_is_outcome_unknown(
+    flavour: str, tagged: bool
+) -> None:
     def hook(response: httpx.Response) -> None:
-        raise httpx.ConnectError("a hook's own request could not connect")
+        request = response.request if tagged else None
+        raise httpx.ConnectError("a hook's own request could not connect", request=request)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=COMPLETED)
@@ -225,7 +238,10 @@ def test_a_connect_error_from_a_response_hook_is_outcome_unknown(flavour: str) -
 
 
 class CompleteThenCloseFails(httpx.SyncByteStream, httpx.AsyncByteStream):
-    """The whole body arrives, then closing the stream fails."""
+    """The whole body arrives, then closing the stream fails with `error`."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
 
     def __iter__(self) -> Iterator[bytes]:
         yield COMPLETED
@@ -234,21 +250,87 @@ class CompleteThenCloseFails(httpx.SyncByteStream, httpx.AsyncByteStream):
         yield COMPLETED
 
     def close(self) -> None:
-        raise httpx.CloseError("close failed")
+        raise self.error
 
     async def aclose(self) -> None:
-        raise httpx.CloseError("close failed")
+        raise self.error
 
 
 @pytest.mark.parametrize("flavour", ["sync", "async"])
-def test_a_complete_answer_survives_a_failing_close(flavour: str) -> None:
+@pytest.mark.parametrize("error", [httpx.CloseError("close failed"), OSError("close failed")])
+def test_a_complete_answer_survives_a_failing_close(flavour: str, error: Exception) -> None:
     sent: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(request)
-        return httpx.Response(200, stream=CompleteThenCloseFails())
+        return httpx.Response(200, stream=CompleteThenCloseFails(error))
 
     request = through_shell(flavour, handler)
 
     assert request.state == "completed"
     assert len(sent) == 1
+
+
+# Against a real HTTP server on this machine: httpx's own transport reads the request's body
+# only once it has connected, which is what tells "never connected" from "maybe sent".
+
+
+class Recorded(http.server.BaseHTTPRequestHandler):
+    bodies: ClassVar[list[bytes]] = []
+
+    def do_POST(self) -> None:
+        length = int(self.headers["Content-Length"])
+        Recorded.bodies.append(self.rfile.read(length))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(COMPLETED)))
+        self.end_headers()
+        self.wfile.write(COMPLETED)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+@pytest.fixture
+def local_api() -> Iterator[str]:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Recorded)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def real_call(flavour: str, base_url: str) -> Any:
+    spec = trade("place_order", "POST", ACCOUNT, "/orders", {"symbol": "EURUSD"}, KEY)
+    if flavour == "sync":
+        ps = Pipsocket(API_KEY, base_url=base_url, max_retries=0)
+        return ps._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
+
+    async def run_async() -> Any:
+        async with AsyncPipsocket(API_KEY, base_url=base_url) as ps:
+            return await ps._requester.call(spec, None, 0)  # pyright: ignore[reportPrivateUsage]
+
+    return asyncio.run(run_async())
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_real_transport_sends_the_body(flavour: str, local_api: str) -> None:
+    Recorded.bodies.clear()
+
+    request = real_call(flavour, local_api)
+
+    assert request.state == "completed"
+    assert Recorded.bodies == [b'{"symbol":"EURUSD"}']
+
+
+@pytest.mark.parametrize("flavour", ["sync", "async"])
+def test_a_real_transport_that_cant_connect_sent_nothing(flavour: str) -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]  # bound, not listening: connections are refused
+
+        with pytest.raises(APIConnectionError) as caught:
+            real_call(flavour, f"http://127.0.0.1:{port}")
+
+    assert type(caught.value) is APIConnectionError
+    assert caught.value.idempotency_key == KEY

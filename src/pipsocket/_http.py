@@ -7,7 +7,7 @@ import platform
 import random
 import re
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 
 import httpx
@@ -100,9 +100,62 @@ def check_seconds(name: str, value: float) -> float:
     return float(value)
 
 
+class RequestBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+    """A request's body that records when the transport begins reading it, which is when
+    sending begins. Every transport reads it, an empty body included."""
+
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+        self.read_started = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        self.read_started = True
+        if self.content:
+            yield self.content
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self.read_started = True
+        if self.content:
+            yield self.content
+
+
+class ResponseBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+    """A response's raw stream that records when it has been read to the end, so a failure
+    after that (closing it) can be told from a body cut short."""
+
+    def __init__(self, stream: httpx.SyncByteStream | httpx.AsyncByteStream) -> None:
+        self.stream = stream
+        self.finished = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        assert isinstance(self.stream, httpx.SyncByteStream)
+        yield from self.stream
+        self.finished = True
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        assert isinstance(self.stream, httpx.AsyncByteStream)
+        async for chunk in self.stream:
+            yield chunk
+        self.finished = True
+
+    def close(self) -> None:
+        assert isinstance(self.stream, httpx.SyncByteStream)
+        self.stream.close()
+
+    async def aclose(self) -> None:
+        assert isinstance(self.stream, httpx.AsyncByteStream)
+        await self.stream.aclose()
+
+
+def watch_response(response: httpx.Response) -> ResponseBody:
+    body = ResponseBody(response.stream)
+    response.stream = body
+    return body
+
+
 def build_request(
     client: httpx.Client | httpx.AsyncClient, spec: Spec, opts: Options, timeout: float
-) -> httpx.Request:
+) -> tuple[httpx.Request, RequestBody]:
     """The same request for every attempt of a call: method, URL, body and key don't change."""
     headers = {
         "Authorization": f"Bearer {opts.api_key}",
@@ -113,7 +166,7 @@ def build_request(
         headers["Content-Type"] = "application/json"
     if spec.idempotency_key is not None:
         headers["Idempotency-Key"] = spec.idempotency_key
-    return client.build_request(
+    request = client.build_request(
         spec.method,
         opts.base_url + spec.path,
         params=list(spec.query) or None,
@@ -121,24 +174,21 @@ def build_request(
         headers=headers,
         timeout=httpx.Timeout(timeout),
     )
+    body = RequestBody(spec.body or b"")
+    request.stream = body
+    return request, body
 
 
-def no_answer(error: httpx.TransportError, request: httpx.Request) -> NoAnswer:
+def no_answer(error: httpx.TransportError, body: RequestBody) -> NoAnswer:
     """A transport error. It proves nothing was written only when it is a connect-phase error
-    httpx raised for this very request: one from a response hook (another client's request,
-    say) comes after the answer arrived."""
+    and the transport never began reading the request's body: httpx's transports open the
+    connection before they read it. An error after that (a response hook's own failure, say)
+    leaves the attempt maybe sent."""
     return NoAnswer(
         error=error,
-        written=not (isinstance(error, _NOT_WRITTEN) and raised_for(error, request)),
+        written=body.read_started or not isinstance(error, _NOT_WRITTEN),
         timed_out=isinstance(error, httpx.TimeoutException),
     )
-
-
-def raised_for(error: httpx.RequestError, request: httpx.Request) -> bool:
-    try:
-        return error.request is request
-    except RuntimeError:  # an error made without a request
-        return False
 
 
 def answer(response: httpx.Response, content: bytes) -> Answer:

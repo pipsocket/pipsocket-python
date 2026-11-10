@@ -33,6 +33,7 @@ from ._http import (
     build_request,
     no_answer,
     options,
+    watch_response,
 )
 from .models import TradeRequest
 from .types import (
@@ -136,28 +137,28 @@ class _Requester:
         if self.http.is_closed:
             return Failed(RuntimeError("The HTTP client has been closed."), maybe_sent=False)
         try:
-            request = build_request(self.http, spec, self.options, timeout)
+            request, body = build_request(self.http, spec, self.options, timeout)
         except Exception as error:
             return Failed(error, maybe_sent=False)
         try:
             # Redirects would be sends the retry policy can't see: the API doesn't redirect.
             response = self.http.send(request, stream=True, follow_redirects=False)
         except httpx.TransportError as error:
-            return no_answer(error, request)
+            return no_answer(error, body)
         except Exception as error:
-            return Failed(error, maybe_sent=True)
+            return Failed(error, maybe_sent=body.read_started)
+        received = watch_response(response)
         content = bytearray()
         try:
             for chunk in response.iter_bytes():
                 content += chunk
-        except httpx.CloseError:
-            # httpx closes the stream once it is read to the end: the body is all here. (Were
-            # a compressed tail missing, the JSON would not parse, and that is maybe sent too.)
-            pass
-        except httpx.HTTPError as error:
-            return body_lost(response, error, bytes(content))
         except Exception as error:
-            return Failed(error, maybe_sent=True)
+            if not received.finished:
+                if isinstance(error, httpx.HTTPError):
+                    return body_lost(response, error, bytes(content))
+                return Failed(error, maybe_sent=True)
+            # The body was read to the end and closing it failed: the answer is all here.
+            # (Were a compressed tail lost with it, the JSON won't parse: maybe sent too.)
         finally:
             # A failure to clean up doesn't change what the attempt came to.
             with contextlib.suppress(Exception):
