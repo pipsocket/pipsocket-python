@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from types import TracebackType
 from typing import Any, cast
 
@@ -45,6 +45,16 @@ from ._http import (
 )
 from .errors import APITimeoutError, PipsocketError
 from .models import TradeRequest
+from .stream import (
+    DEFAULT_QUEUE_SIZE,
+    AsyncStream,
+    async_reader,
+    new_machine,
+    report,
+    settled,
+    stream_url,
+    watch,
+)
 from .types import (
     AccountView,
     CheckView,
@@ -56,6 +66,7 @@ from .types import (
     OrderTypeParam,
     PendingOrderView,
     PositionView,
+    RequestView,
     SymbolSummaryView,
     SymbolView,
     TickView,
@@ -154,25 +165,38 @@ class _Requester:
             run.close()
 
     async def trade(
-        self, spec: Spec, timeout: float | None, max_retries: int | None
+        self, spec: Spec, timeout: float | None, max_retries: int | None, streams: list[AsyncStream]
     ) -> TradeRequest:
         """A trade call. A cancellation or interrupt passes through as it is, with the key
         set on it where it can carry one; nothing is sent after it."""
         try:
-            return cast(TradeRequest, await self.call(spec, timeout, max_retries))
+            request = cast(TradeRequest, await self.call(spec, timeout, max_retries))
         except PipsocketError:
             raise
         except BaseException as error:
             attach_key(error, spec.idempotency_key)
             raise
+        return newest(request, streams, spec.idempotency_key)
 
-    async def wait(self, spec: Spec, timeout: float) -> TradeRequest:
+    async def wait(
+        self, spec: Spec, request_id: str, timeout: float, streams: list[AsyncStream]
+    ) -> TradeRequest:
+        known = settled(streams, request_id)
+        if known is not None:
+            return TradeRequest(cast(RequestView, known))
         run = drive_wait(check_wait(timeout), self.options.clock)
+        seen = _Seen(lambda error: report(streams, error)) if streams else None
+        undo = [watch(stream, request_id, seen.saw) for stream in list(streams)] if seen else []
         step = next(run)
         try:
             while True:
                 if isinstance(step, Look):
-                    step = run.send(await self.look(spec, step.seconds))
+                    outcome = await self.look(spec, step.seconds, seen)
+                    if isinstance(outcome, PipsocketError):
+                        report(streams, outcome)
+                    step = run.send(outcome)
+                elif seen is not None:
+                    step = run.send(await seen.wait(step.seconds))
                 else:
                     await self.sleep(step.seconds)
                     step = run.send(None)
@@ -180,26 +204,22 @@ class _Requester:
             return cast(TradeRequest, done.value)
         finally:
             run.close()
+            for unwatch in undo:
+                unwatch()
 
-    async def look(self, spec: Spec, seconds: float) -> TradeRequest | PipsocketError:
-        """One lookup for wait(), over within `seconds` all told: the HTTP timeout applies to
-        each network operation, so a slow answer could otherwise run past wait()'s deadline.
-        A lookup that runs over is cancelled and left to wind down on its own (its cleanup may
-        be slow): it is only a read."""
+    async def look(
+        self, spec: Spec, seconds: float, seen: _Seen | None
+    ) -> TradeRequest | PipsocketError:
+        """One lookup for wait(), over within `seconds` all told (the HTTP timeout applies to
+        each network operation, so a slow answer could otherwise run past wait()'s deadline),
+        and ended at once by a settlement an open stream sees meanwhile. A lookup that runs
+        over, or that the stream beats, is cancelled and left to wind down on its own (its
+        cleanup may be slow): it is only a read."""
         attempt_timeout = min(self.options.timeout, seconds)
         try:
-            if math.isinf(seconds):
+            if seen is None and math.isinf(seconds):
                 return cast(TradeRequest, await self.call(spec, attempt_timeout, 0))
-            looking = asyncio.ensure_future(self.call(spec, attempt_timeout, 0))
-            try:
-                done, _ = await asyncio.wait({looking}, timeout=seconds)
-            except asyncio.CancelledError:
-                abandon(looking)
-                raise
-            if not done:
-                abandon(looking)
-                raise APITimeoutError("The lookup did not answer within wait()'s timeout.")
-            return cast(TradeRequest, looking.result())
+            return await (seen or _Seen()).race(self.call(spec, attempt_timeout, 0), seconds)
         except PipsocketError as error:
             return error
 
@@ -240,18 +260,84 @@ class _Requester:
         return answer(response, bytes(content))
 
 
+class _Seen:
+    """A request an open stream saw settle, for a wait()."""
+
+    def __init__(self, failed: Callable[[PipsocketError], None] = lambda error: None) -> None:
+        self.request: TradeRequest | None = None
+        self.changed = asyncio.Event()
+        # Told of a lookup's failure even when the stream won the race: a 401 stops it too.
+        self.failed = failed
+
+    def saw(self, body: Any) -> None:
+        request = TradeRequest(body)
+        if request.final:
+            self.request = request
+            self.changed.set()
+
+    async def wait(self, seconds: float) -> TradeRequest | None:
+        """Wait up to `seconds`, or until a stream sees the request settle."""
+        settled = asyncio.ensure_future(self.changed.wait())
+        try:
+            await asyncio.wait({settled}, timeout=seconds)
+        finally:
+            # Not awaited: awaiting it could swallow a cancellation of this wait() itself.
+            abandon(settled, self.failed)
+        return self.request
+
+    async def race(self, lookup: Awaitable[Any], seconds: float) -> TradeRequest:
+        """Look the request up within `seconds`, unless a stream sees it settle first. A final
+        state seen on the stream is never replaced by an older, outstanding one from the
+        lookup. A lookup that is beaten, runs over or outlives a cancelled wait() is cancelled
+        without waiting for it."""
+        looking = asyncio.ensure_future(lookup)
+        settled = asyncio.ensure_future(self.changed.wait())
+        limit = None if math.isinf(seconds) else seconds
+        try:
+            await asyncio.wait(
+                {looking, settled}, timeout=limit, return_when=asyncio.FIRST_COMPLETED
+            )
+        except BaseException:
+            abandon(looking, self.failed)
+            raise
+        finally:
+            abandon(settled, self.failed)  # not awaited, as above
+        if self.request is not None:
+            abandon(looking, self.failed)
+            return self.request
+        if not looking.done():
+            abandon(looking, self.failed)
+            raise APITimeoutError("The lookup did not answer within wait()'s timeout.")
+        try:
+            return cast(TradeRequest, looking.result())
+        except PipsocketError as error:
+            self.failed(error)
+            raise
+
+
+def newest(request: TradeRequest, streams: list[Any], key: str | None) -> TradeRequest:
+    """A trade call's answer, unless an open stream already saw that request settle: a slower
+    202 never moves a request seen as final back to pending."""
+    if request.outstanding:
+        known = settled(streams, request.id)
+        if known is not None:
+            return TradeRequest(cast(RequestView, known), idempotency_key=key)
+    return request
+
+
 class AsyncAccount:
     """One account's calls. Get it with `AsyncPipsocket.account(id)`."""
 
     def __init__(self, requester: _Requester, account_id: str) -> None:
         self._requester = requester
         self.id = account_id
-        self.positions = Positions(requester, account_id)
-        self.orders = Orders(requester, account_id)
-        self.requests = Requests(requester, account_id)
-        self.history = History(requester, account_id)
-        self.symbols = Symbols(requester, account_id)
-        self.kill_switch = KillSwitch(requester, account_id)
+        self._streams: list[AsyncStream] = []
+        self.positions = Positions(requester, account_id, self._streams)
+        self.orders = Orders(requester, account_id, self._streams)
+        self.requests = Requests(requester, account_id, self._streams)
+        self.history = History(requester, account_id, self._streams)
+        self.symbols = Symbols(requester, account_id, self._streams)
+        self.kill_switch = KillSwitch(requester, account_id, self._streams)
 
     async def get(
         self, *, timeout: float | None = None, max_retries: int | None = None
@@ -260,14 +346,39 @@ class AsyncAccount:
         spec = safe("account", "GET", self.id, "/")
         return cast(AccountView, await self._requester.call(spec, timeout, max_retries))
 
+    def stream(
+        self,
+        ticks: Iterable[str] = (),
+        *,
+        snapshot: bool = True,
+        queue_size: int = DEFAULT_QUEUE_SIZE,
+    ) -> AsyncStream:
+        """The account's events as they happen, as `async with acct.stream(...) as events`.
+
+        Events are the API's messages as they are, plus `resync`, which the helper sends after
+        every (re)connection and gap with a new baseline: the account, positions and pending
+        orders read over REST, and the history since the last checkpoint. `snapshot=False`
+        sends `resync` without reading anything. The socket is kept open and reconnected.
+        """
+        machine = new_machine(self._requester.options, ticks, snapshot, queue_size)
+        url = stream_url(self._requester.options, self.id)
+        return AsyncStream(
+            url=url,
+            options=self._requester.options,
+            machine=machine,
+            reader=async_reader(self),
+            streams=self._streams,
+        )
+
     def __repr__(self) -> str:
         return f"AsyncAccount({self.id!r})"
 
 
 class _Resource:
-    def __init__(self, requester: _Requester, account_id: str) -> None:
+    def __init__(self, requester: _Requester, account_id: str, streams: list[AsyncStream]) -> None:
         self._requester = requester
         self._account = account_id
+        self._streams = streams
 
 
 class Positions(_Resource):
@@ -292,7 +403,7 @@ class Positions(_Resource):
         path = f"/positions/{ticket_segment(ticket)}"
         body = {"sl": sl, "tp": tp}
         spec = trade("set_position_levels", "PATCH", self._account, path, body, idempotency_key)
-        return await self._requester.trade(spec, timeout, max_retries)
+        return await self._requester.trade(spec, timeout, max_retries, self._streams)
 
     async def close(
         self,
@@ -319,7 +430,7 @@ class Positions(_Resource):
             "comment": comment,
         }
         spec = trade("close_position", "POST", self._account, path, body, idempotency_key)
-        return await self._requester.trade(spec, timeout, max_retries)
+        return await self._requester.trade(spec, timeout, max_retries, self._streams)
 
     async def close_by(
         self,
@@ -334,7 +445,7 @@ class Positions(_Resource):
         path = f"/positions/{ticket_segment(ticket)}/close-by"
         body = {"position_by": position_by}
         spec = trade("close_by", "POST", self._account, path, body, idempotency_key)
-        return await self._requester.trade(spec, timeout, max_retries)
+        return await self._requester.trade(spec, timeout, max_retries, self._streams)
 
 
 class Orders(_Resource):
@@ -372,7 +483,7 @@ class Orders(_Resource):
         """
         body = order_fields(locals())
         spec = trade("place_order", "POST", self._account, "/orders", body, idempotency_key)
-        return await self._requester.trade(spec, timeout, max_retries)
+        return await self._requester.trade(spec, timeout, max_retries, self._streams)
 
     async def check(
         self,
@@ -423,7 +534,7 @@ class Orders(_Resource):
             "expiration": expiration,
         }
         spec = trade("modify_order", "PATCH", self._account, path, body, idempotency_key)
-        return await self._requester.trade(spec, timeout, max_retries)
+        return await self._requester.trade(spec, timeout, max_retries, self._streams)
 
     async def cancel(
         self,
@@ -436,7 +547,7 @@ class Orders(_Resource):
         """Cancel a pending order."""
         path = f"/orders/{ticket_segment(ticket)}"
         spec = trade("cancel_order", "DELETE", self._account, path, None, idempotency_key)
-        return await self._requester.trade(spec, timeout, max_retries)
+        return await self._requester.trade(spec, timeout, max_retries, self._streams)
 
 
 class Requests(_Resource):
@@ -452,11 +563,11 @@ class Requests(_Resource):
 
         It returns the request as it stands at the timeout (pending or unknown included): it
         never raises for "still pending", and it only ever looks up, never sends. A 401 or 404
-        is raised; other failures are polled through until the timeout. No lookup runs past
-        the timeout, so a short one may raise the lookup's own timeout error; `timeout=0` looks
-        it up once, with the client's per-attempt timeout.
+        is raised; other failures are polled through until the timeout. With a stream open on
+        this account handle, a request event for it ends the wait at once.
         """
-        return await self._requester.wait(lookup(self._account, request_id), timeout)
+        spec = lookup(self._account, request_id)
+        return await self._requester.wait(spec, request_id, timeout, self._streams)
 
 
 class History(_Resource):
@@ -574,18 +685,18 @@ def order_fields(arguments: dict[str, Any]) -> dict[str, Any]:
     return {name: arguments[name] for name in ORDER_FIELDS}
 
 
-# Lookups wait() stopped waiting for: cancelled but not awaited, since their cleanup may be
-# slow. Kept until they end, so they aren't collected while running, and their errors read.
+# Tasks a wait() stopped waiting for: cancelled but not awaited, since a lookup's cleanup may
+# be slow and awaiting could swallow the caller's own cancellation. Kept until they end, so
+# they aren't collected while running; a failure a lookup still meets (a 401) is reported.
 _abandoned: set[asyncio.Future[Any]] = set()
 
 
-def abandon(task: asyncio.Future[Any]) -> None:
+def abandon(task: asyncio.Future[Any], failed: Callable[[PipsocketError], None]) -> None:
+    def ended(task: asyncio.Future[Any]) -> None:
+        _abandoned.discard(task)
+        if not task.cancelled() and isinstance(task.exception(), PipsocketError):
+            failed(cast(PipsocketError, task.exception()))
+
     task.cancel()
     _abandoned.add(task)
-    task.add_done_callback(_ended)
-
-
-def _ended(task: asyncio.Future[Any]) -> None:
-    _abandoned.discard(task)
-    if not task.cancelled():
-        task.exception()
+    task.add_done_callback(ended)

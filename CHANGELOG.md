@@ -14,6 +14,12 @@ fingerprint `python scripts/spec_diff.py --fingerprint openapi.json` prints).
 - `idempotency_key=` on the trade calls, checked before sending.
 - `orders.check`, `kill_switch.engage` and `kill_switch.lift`.
 - `requests.wait(id, timeout=30)`: looks a request up until it is final or the time is up.
+- `acct.stream(ticks=[...])`, sync and async: the account's events, reconnected, with the tick set
+  sent again, keep-alive, and a `resync` event after every reconnection or gap carrying a new
+  snapshot and the history since the last checkpoint. A stream open on an account handle ends
+  that handle's `requests.wait()` as soon as the request settles.
+- `websockets` (16.1 or later, which drops credentials on a redirect to another origin) is now
+  a dependency.
 
 ## 0.1.0a1
 

@@ -6,6 +6,7 @@ import io
 import json
 import re
 import time
+from collections.abc import Iterator
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,10 @@ from typing import Any
 import httpx
 import pytest
 
+from pipsocket import stream
 from pipsocket._generated.operations import OPERATIONS
 
+from .fake_stream import FakeStreamServer
 from .fakes import API_KEY
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +47,28 @@ class FakeAPI:
 
 
 @pytest.fixture
-def fake_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeAPI:
+def fake_stream(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeStreamServer]:
+    """The stream at wss.pipsocket.com, answered by a local fake."""
+    server = FakeStreamServer()
+    server.after_ticks = [
+        {"type": "tick", "symbol": "EURUSD", "bid": 1.0841, "ask": 1.08412, "time_msc": 1},
+        {"type": "request", **json.loads((FIXTURES / "request.json").read_text())["200"]["done"]},
+    ]
+    real_connect = stream.connect
+
+    def connect(url: str, **options: Any) -> Any:
+        assert url.startswith("wss://wss.pipsocket.com/v1/accounts/")
+        return real_connect(url.replace("wss://wss.pipsocket.com", server.url), **options)
+
+    monkeypatch.setattr(stream, "connect", connect)
+    yield server
+    server.stop()
+
+
+@pytest.fixture
+def fake_api(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_stream: FakeStreamServer
+) -> FakeAPI:
     api = FakeAPI()
 
     def handle(_: object, request: httpx.Request) -> httpx.Response:
