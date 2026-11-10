@@ -126,5 +126,6 @@ def test_the_journal_example_keeps_an_unknown_outcome_open(fake_api: FakeAPI) ->
 
     (opened,) = journal_after(fake_api)
 
-    keys = {request.headers["Idempotency-Key"] for request in fake_api.sent}
-    assert keys == {opened["key"]}
+    trades = [request for request in fake_api.sent if request.method == "POST"]
+    assert trades, "the order was attempted"
+    assert {request.headers["Idempotency-Key"] for request in trades} == {opened["key"]}

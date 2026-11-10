@@ -29,6 +29,8 @@ from pipsocket.stream import (  # pyright: ignore[reportPrivateUsage]
     Engine,
     Settled,
     _AsyncSink,
+    _End,
+    _ThreadSink,
 )
 
 from .fake_stream import FakeStreamServer
@@ -691,3 +693,85 @@ def test_a_sync_stream_that_cant_start_raises_instead_of_hanging(
         next(events)
 
     assert isinstance(caught.value.__cause__, OSError)
+
+
+def test_iteration_ends_at_once_after_close_sync(server: FakeStreamServer) -> None:
+    acct = sync_client(server).account(ACCOUNT)
+    events = acct.stream()
+    with events:
+        assert next(events)["type"] == "resync"
+        for ticket in (1, 2, 3):
+            server.send({"type": "deal", "deal": {"ticket": ticket}})
+        time.sleep(0.3)  # queued, not taken
+        events.close()
+        with pytest.raises(StopIteration):
+            next(events)
+
+
+def test_iteration_ends_at_once_after_close_async(server: FakeStreamServer) -> None:
+    async def run() -> list[Any]:
+        ps = async_client(server)
+        async with ps:
+            events = ps.account(ACCOUNT).stream()
+            async with events:
+                assert (await anext(events))["type"] == "resync"
+                for ticket in (1, 2, 3):
+                    server.send({"type": "deal", "deal": {"ticket": ticket}})
+                await asyncio.sleep(0.3)  # queued, not taken
+                await events.close()
+                return [event async for event in events]
+
+    assert asyncio.run(run()) == []
+
+
+def test_close_from_another_thread_wakes_a_blocked_loop(server: FakeStreamServer) -> None:
+    acct = sync_client(server).account(ACCOUNT)
+    seen: list[str] = []
+
+    with acct.stream() as events:
+        threading.Timer(0.3, events.close).start()
+        for event in events:  # blocks after the resync until close() wakes it
+            seen.append(event["type"])
+
+    assert seen == ["resync"]
+
+
+DEAL = {"type": "deal", "deal": {"ticket": 7}}
+
+
+def test_nothing_the_engine_emits_while_closing_is_delivered_sync(server: FakeStreamServer) -> None:
+    acct = sync_client(server).account(ACCOUNT)
+    events = acct.stream(snapshot=False, queue_size=1)
+    with events:
+        assert next(events)["type"] == "resync"
+        for _ in range(3):  # inputs the engine handles before it sees Close
+            events._feed(_stream_core.Message(DEAL))  # pyright: ignore[reportPrivateUsage]
+        events.close()
+        assert list(events) == []
+
+
+def test_nothing_the_engine_emits_while_closing_is_delivered_async(
+    server: FakeStreamServer,
+) -> None:
+    async def run() -> list[Any]:
+        ps = async_client(server)
+        async with ps:
+            events = ps.account(ACCOUNT).stream(snapshot=False, queue_size=1)
+            async with events:
+                assert (await anext(events))["type"] == "resync"
+                for _ in range(3):
+                    events._feed(_stream_core.Message(DEAL))  # pyright: ignore[reportPrivateUsage]
+                await events.close()
+                return [event async for event in events]
+
+    assert asyncio.run(run()) == []
+
+
+@pytest.mark.parametrize("sink", [_AsyncSink(1), _ThreadSink(1)], ids=["async", "thread"])
+def test_a_closed_queue_takes_nothing_and_reports_no_overflow(sink: Any) -> None:
+    sink.put({"type": "deal"})
+    sink.close()
+
+    assert [sink.put(DEAL) for _ in range(3)] == [[], [], []]
+    assert len(sink.items) == 1
+    assert isinstance(sink.items[0], _End)

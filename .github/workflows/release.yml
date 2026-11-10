@@ -34,7 +34,8 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           version="$(uv run python -c 'import pipsocket; print(pipsocket.__version__)')"
           test "v$version" = "$TAG"
-          grep -q "^## $version" CHANGELOG.md
+          # The heading is the version alone or followed by a space: 0.1.0 doesn't match 0.1.0a1.
+          grep -Eq "^## ${version//./\\.}( |$)" CHANGELOG.md
       - name: The snapshot matches the published document
         run: |
           curl -sSfL -A "pipsocket-python-release (+https://github.com/pipsocket/pipsocket-python)" \
@@ -88,7 +89,7 @@ jobs:
         run: |
           version="${TAG#v}"
           awk -v heading="## $version" '
-            index($0, heading) == 1 { found = 1; next }
+            $0 == heading || index($0, heading " ") == 1 { found = 1; next }
             found && /^## / { exit }
             found { print }
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"

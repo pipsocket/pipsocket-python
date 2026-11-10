@@ -415,9 +415,12 @@ class _AsyncSink:
     def __init__(self, limit: int) -> None:
         self.items: deque[Event | _End] = deque()
         self.limit = limit
+        self.closed = False
         self.ready = asyncio.Event()
 
     def put(self, item: Event | _End) -> list[Event]:
+        if self.closed:
+            return []  # the caller closed the stream: nothing more is delivered
         if not isinstance(item, _End) and len(self.items) >= self.limit:
             dropped = [event for event in self.items if not isinstance(event, _End)] + [item]
             self.items.clear()
@@ -425,6 +428,13 @@ class _AsyncSink:
         self.items.append(item)
         self.ready.set()
         return []
+
+    def close(self) -> None:
+        """The caller closed the stream: nothing still queued, or put later, is delivered."""
+        self.closed = True
+        self.items.clear()
+        self.items.append(_End(None))
+        self.ready.set()
 
     async def get(self) -> Event | _End:
         while not self.items:
@@ -503,9 +513,12 @@ class AsyncStream:
         self._engine.feed(core.SetTicks(tuple(symbols)))
 
     async def close(self) -> None:
-        """Close the stream. Waiting wait() calls carry on polling over REST."""
+        """Close the stream. Iteration ends at once: events still queued are not delivered.
+        Waiting wait() calls carry on polling over REST."""
         if self in self._streams:
             self._streams.remove(self)
+        if self._ended is None:
+            self._sink.close()
         if self._task is None:
             return
         self._engine.feed(core.Close())
@@ -524,10 +537,13 @@ class _ThreadSink:
     def __init__(self, limit: int) -> None:
         self.items: deque[Event | _End] = deque()
         self.limit = limit
+        self.closed = False
         self.ready = threading.Condition()
 
     def put(self, item: Event | _End) -> list[Event]:
         with self.ready:
+            if self.closed:
+                return []  # the caller closed the stream: nothing more is delivered
             if not isinstance(item, _End) and len(self.items) >= self.limit:
                 dropped = [event for event in self.items if not isinstance(event, _End)] + [item]
                 self.items.clear()
@@ -535,6 +551,14 @@ class _ThreadSink:
             self.items.append(item)
             self.ready.notify_all()
             return []
+
+    def close(self) -> None:
+        """The caller closed the stream: nothing still queued, or put later, is delivered."""
+        with self.ready:
+            self.closed = True
+            self.items.clear()
+            self.items.append(_End(None))
+            self.ready.notify_all()
 
     def get(self) -> Event | _End:
         with self.ready:
@@ -645,9 +669,13 @@ class Stream:
         self._feed(core.SetTicks(tuple(symbols)))
 
     def close(self) -> None:
-        """Close the stream. Waiting wait() calls carry on polling over REST."""
+        """Close the stream. Iteration ends at once, from any thread (a `for` loop blocked
+        waiting for an event wakes and stops): events still queued are not delivered. Waiting
+        wait() calls carry on polling over REST."""
         if self in self._streams:
             self._streams.remove(self)
+        if self._ended is None:
+            self._sink.close()
         self._feed(core.Close())
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join()

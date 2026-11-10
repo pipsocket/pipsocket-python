@@ -10,7 +10,7 @@ from .types import RequestView, SentRequest
 
 __all__ = ["ACCEPTED_STATES", "FINAL_STATES", "OUTSTANDING_STATES", "TradeRequest"]
 
-# MT5 took the request.
+# MT5 took the request (not necessarily a fill: see TradeRequest).
 ACCEPTED_STATES = frozenset({"completed", "placed", "partial"})
 # Nothing more happens to the request.
 FINAL_STATES = ACCEPTED_STATES | {"rejected", "not_sent", "not_executed", "executed"}
@@ -35,6 +35,11 @@ class TradeRequest:
       is "operator"
     - executed: who settled it and why, `{outcome, settled_by, reason}`
     - pending, unknown: None
+
+    `completed` means MT5 completed the request, whatever it was: a market order filled, but
+    also a pending order placed, an order modified or cancelled, stops set. A fill shows as a
+    deal: `result["deal"]` is non-zero (and `sent["action"]` is "deal"). A placed pending order
+    has `result["order"]` set and `result["deal"]` 0.
 
     `idempotency_key` is set only on the answer to a trade call this client made, and
     `http_status` only on answers from the REST API (not on stream events).
@@ -93,7 +98,8 @@ class TradeRequest:
 
     @property
     def accepted(self) -> bool:
-        """MT5 took it: completed, placed or partial."""
+        """MT5 took the request: completed, placed or partial. Not the same as filled: a fill
+        has a non-zero `result["deal"]`."""
         return self.state in ACCEPTED_STATES
 
     @property
